@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {lzss,safeName,parseInt,parsePro,parseMap,indexDat} from './research.mjs';
+assert.equal(lzss(Buffer.from([7,65,66,67])).toString(),'ABC');
+assert.equal(lzss(Buffer.from([0,0,0])).toString(),'   ');
+assert.throws(()=>lzss(Buffer.from([0,0])));
+assert.throws(()=>lzss(Buffer.from([7,65,66,67]),2));
+for(const p of ['../escape','a/../../escape','C:/escape','/escape','a//b'])assert.throws(()=>safeName(p));
+assert.equal(safeName('Scripts\\V13CAVE.INT'),'scripts/v13cave.int');
+assert.throws(()=>indexDat(Buffer.alloc(4),'bad'));
+assert.throws(()=>parseInt(Buffer.alloc(12)));
+assert.throws(()=>parsePro(Buffer.alloc(4)));
+assert.throws(()=>parseMap(Buffer.alloc(236)));
+if(process.argv.includes('--integration')){
+const read=n=>JSON.parse(fs.readFileSync(new URL('./reports/'+n+'.json',import.meta.url)));
+assert.equal(read('errors').length,0);
+const maps=read('maps');assert.equal(maps.length,72);
+assert(maps.every(m=>m.objectPlacementDecoded&&m.remainingBytes===0));
+const scripts=read('scripts');assert.equal(scripts.length,952);
+assert(scripts.find(s=>s.path==='scripts/v13cave.int').procedures.some(p=>p.name==='map_enter_p_proc'));
+assert(read('assets').find(e=>e.path==='scripts/v13cave.int').source==='DATA');
+const map=JSON.parse(fs.readFileSync(new URL('./reports/exports/vault13-map.json',import.meta.url)));
+assert.equal(map.data.objects.length,1494);assert.equal(map.data.remainingBytes,0);
+assert(map.data.objects.some(o=>o.inventory.length>0));
+console.log('Passed decoder bounds, LZSS fixtures, patch precedence, script procedures, all-map structural checks and Vault 13 export.');
+}else console.log('Passed asset-free decoder and path-safety tests. Use --integration after scanning your local game.');
