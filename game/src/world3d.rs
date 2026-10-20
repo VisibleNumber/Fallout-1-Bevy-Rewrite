@@ -129,6 +129,10 @@ struct Controller {
     roofs: bool,
     overview: bool,
     clock: f32,
+    crouched: bool,
+    running: bool,
+    height: f32,
+    velocity: f32,
 }
 #[derive(Component)]
 struct Card;
@@ -227,6 +231,10 @@ pub fn run() {
             pitch: -0.12,
             first: false,
             moving: false,
+            crouched: false,
+            running: false,
+            height: 0.,
+            velocity: 0.,
             roofs: true,
             overview: false,
             clock: 0.,
@@ -253,6 +261,7 @@ pub fn run() {
             Update,
             (
                 inventory_ui::actions,
+                movement_smoke,
                 door_smoke,
                 controls,
                 combat_ui::item_actions,
@@ -592,18 +601,38 @@ fn controls(
     if keys.pressed(KeyCode::KeyA) {
         movement -= right;
     }
-    let delta = movement.normalize_or_zero()
-        * time.delta_secs().min(0.05)
-        * if keys.pressed(KeyCode::ShiftLeft) {
-            3.5
-        } else {
-            2.
-        };
-    for axis in [Vec2::new(delta.x, 0.), Vec2::new(0., delta.y)] {
-        let next = control.position + axis;
-        if allowed(next, &data, &walls) {
-            control.position = next;
-            control.moving |= axis.length_squared() > 0.;
+    if keys.just_pressed(KeyCode::CapsLock) {
+        control.running = !control.running;
+    }
+    if keys.just_pressed(KeyCode::ControlLeft) && control.height == 0. {
+        control.crouched = !control.crouched;
+    }
+    if keys.just_pressed(KeyCode::Space) && control.height == 0. && !control.crouched {
+        control.velocity = 4.5;
+    }
+    let dt = time.delta_secs().min(0.1);
+    let steps = (dt / 0.008).ceil().max(1.) as usize;
+    let dt = dt / steps as f32;
+    let speed = if control.crouched {
+        1.2
+    } else if control.running ^ keys.pressed(KeyCode::ShiftLeft) {
+        3.5
+    } else {
+        2.
+    };
+    let delta = movement.normalize_or_zero() * dt * speed;
+    for _ in 0..steps {
+        control.velocity -= 12. * dt;
+        control.height = (control.height + control.velocity * dt).max(0.);
+        if control.height == 0. {
+            control.velocity = 0.;
+        }
+        for axis in [Vec2::new(delta.x, 0.), Vec2::new(0., delta.y)] {
+            let next = control.position + axis;
+            if allowed(next, &data, &walls) {
+                control.position = next;
+                control.moving |= axis.length_squared() > 0.;
+            }
         }
     }
     motion.tile = tile_at(control.position).unwrap();
@@ -697,7 +726,11 @@ fn draw(
         control.pitch.sin(),
         -control.yaw.cos() * control.pitch.cos(),
     );
-    let eye = Vec3::new(control.position.x, 1.55, control.position.y);
+    let eye = Vec3::new(
+        control.position.x,
+        control.height + if control.crouched { 1.0 } else { 1.55 },
+        control.position.y,
+    );
     **camera = if control.overview {
         Transform::from_xyz(control.position.x + 32., 48., control.position.y + 35.).looking_at(
             Vec3::new(control.position.x, 0., control.position.y),
@@ -734,7 +767,11 @@ fn draw(
             } else {
                 &data.player[facing]
             };
-            transform.translation = Vec3::new(control.position.x, f.h / 64., control.position.y);
+            transform.translation = Vec3::new(
+                control.position.x,
+                f.h / 64. * if control.crouched { 0.65 } else { 1. } + control.height,
+                control.position.y,
+            );
             Some(f)
         } else if let Some(npc) = npc {
             Some(&data.actors[npc.0].standing[(data.actors[npc.0].rotation + facing) % 6])
@@ -745,11 +782,16 @@ fn draw(
             if let Some(mat) = materials.get_mut(&handle.0) {
                 mat.base_color_texture = Some(assets.load(f.file.clone()));
             }
-            transform.scale.y = f.h / 32.;
+            transform.scale.y = f.h / 32.
+                * if avatar.is_some() && control.crouched {
+                    0.65
+                } else {
+                    1.
+                };
         }
     }
     **status = Text::new(format!(
-        "FALLOUT | 3D region blockout | {} person\nWASD move | Hold right mouse: look | Tab: camera | H: roofs | V: overview | F2/F3: next/previous map | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
+        "FALLOUT | 3D region blockout | {} person\nWASD | CapsLock: run | Shift: invert | Ctrl: crouch | Space: jump\nHold right mouse: look | Tab: camera | H: roofs | V: overview | F2/F3: next/previous map | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
         if control.first { "First" } else { "Third" },
         fight.player.hp,
         fight.player.max_hp,
@@ -811,7 +853,7 @@ fn smoke(
         }
         if *stage == 1 && data.map_name == "shadye" && time.elapsed_secs() > 7. {
             keys.release(KeyCode::F2);
-            keys.press(KeyCode::F2);
+            keys.press(KeyCode::F3);
             *stage = 2;
         }
         if *stage == 2 && data.map_name == "shadyw" {
@@ -959,6 +1001,8 @@ fn switch_map(
     motion.message = format!("Entered {name}");
     control.position = ground(motion.tile);
     control.moving = false;
+    control.height = 0.;
+    control.velocity = 0.;
     *data = next;
     *art = next_art;
     for entity in &entities {
@@ -1020,4 +1064,56 @@ fn door_smoke(
         exit.write(AppExit::Success);
     }
     assert!(time.elapsed_secs() < 15., "Door check timed out");
+}
+
+/// Exercise real input and controller systems in a rendered application.
+fn movement_smoke(
+    time: Res<Time>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    control: Res<Controller>,
+    mut stage: Local<u8>,
+    mut due: Local<f32>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !std::env::args().any(|a| a == "--movement-smoke") {
+        return;
+    }
+    let now = time.elapsed_secs();
+    if now < 3. || now < *due {
+        return;
+    }
+    match *stage {
+        0 => {
+            keys.press(KeyCode::Space);
+            *due = now + 0.15;
+        }
+        1 => {
+            assert!(control.height > 0.1, "jump must lift player");
+            keys.release(KeyCode::Space);
+            *due = now + 1.;
+        }
+        2 => {
+            assert_eq!(control.height, 0., "player must land");
+            keys.press(KeyCode::ControlLeft);
+        }
+        3 => {
+            assert!(control.crouched);
+            keys.release(KeyCode::ControlLeft);
+            keys.press(KeyCode::Space);
+            *due = now + 0.15;
+        }
+        4 => {
+            assert_eq!(control.height, 0., "crouching prevents jumping");
+            keys.release(KeyCode::Space);
+            keys.press(KeyCode::ControlLeft);
+            keys.press(KeyCode::CapsLock);
+            keys.press(KeyCode::Tab);
+        }
+        _ => {
+            assert!(!control.crouched && control.running && control.first);
+            println!("3D input check passed: jump, landing, crouch, run toggle, camera toggle");
+            exit.write(AppExit::Success);
+        }
+    }
+    *stage += 1;
 }

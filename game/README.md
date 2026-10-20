@@ -113,3 +113,9 @@ Town progress captures: `--3d-smoke --town-overview` captures `shady-west-progre
 In `--3d`, F2/F3 select the next/previous prepared map. Start directly with `--3d --map=hubdwntn` or another catalog ID. The existing 2D campaign travel is unchanged. `--3d --region-smoke` visits each prepared map, validates switching, and captures private `game/assets/region-<map>.png` screenshots.
 
 The adapter keeps each prop's original `source_pid`, `source_id`, `tile`, and a `material_slot` (`wall`, `door`, `prop`) so a later authored mapping can select suitable locally converted New Vegas meshes/materials. No automatic whole-building replacement has been applied. Terrain heights, wall orientation/shape refinement, special multi-storey structures, stairs, roofs, collision details and individual replacements need review per location. Maps load separately; seamless world travel and region gameplay are not implemented.
+
+## 3D movement increment
+
+WASD moves; Caps Lock toggles walk/run and holding left Shift inverts that selection. Left Ctrl toggles crouching while grounded; Space jumps while standing. Tab switches first/third person. Hold right mouse to look. Movement uses small collision steps and keeps original map walkability authoritative even while airborne. Jumping does not yet allow traversing raised geometry; crouching currently scales the sprite rather than playing a dedicated animation. Speeds, jump height and gravity are provisional, not verified New Vegas values.
+
+`--3d --movement-smoke` exercises the actual input/controller systems and asserts takeoff, landing, crouch, blocked crouched jump, run toggle and camera toggle. The town round-trip smoke now uses F3 to return from the east section, respecting the expanded region catalog. NPC quest integration, persistent 3D saves and faithful architectural replacement remain pending.
