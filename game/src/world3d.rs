@@ -290,6 +290,59 @@ fn material(
         ..default()
     })
 }
+fn nv_texture(slot: &str, assets: &AssetServer) -> Option<Handle<Image>> {
+    use bevy::image::{
+        ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler,
+        ImageSamplerDescriptor,
+    };
+    let file = format!("nv/materials/{slot}.png");
+    if !std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join(&file)
+        .exists()
+    {
+        return None;
+    }
+    Some(
+        assets.load_with_settings(file, |settings: &mut ImageLoaderSettings| {
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                mag_filter: ImageFilterMode::Linear,
+                min_filter: ImageFilterMode::Linear,
+                ..default()
+            });
+        }),
+    )
+}
+/// Project repeating UVs from face positions, one texture per two world units.
+fn textured_box(size: Vec3) -> Mesh {
+    use bevy::mesh::VertexAttributeValues;
+    let mut mesh = Mesh::from(Cuboid::from_size(size));
+    let VertexAttributeValues::Float32x3(p) = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+    else {
+        unreachable!()
+    };
+    let VertexAttributeValues::Float32x3(n) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap()
+    else {
+        unreachable!()
+    };
+    let uv: Vec<[f32; 2]> = p
+        .iter()
+        .zip(n)
+        .map(|(p, n)| {
+            if n[1].abs() > 0.5 {
+                [p[0] / 2., p[2] / 2.]
+            } else if n[0].abs() > 0.5 {
+                [p[2] / 2., -p[1] / 2.]
+            } else {
+                [p[0] / 2., -p[1] / 2.]
+            }
+        })
+        .collect();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv);
+    mesh
+}
 fn setup(
     mut commands: Commands,
     data: Res<SceneData>,
@@ -303,14 +356,16 @@ fn setup(
     let card = meshes.add(Rectangle::new(1., 1.));
     let mut cache = HashMap::new();
 
-    let roof_mesh = meshes.add(Cuboid::new(2., 0.14, 2.));
+    let roof_mesh = meshes.add(textured_box(Vec3::new(2., 0.14, 2.)));
     let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.66, 0.63, 0.56),
+        base_color: Color::WHITE,
+        base_color_texture: nv_texture("wall", &assets),
         perceptual_roughness: 1.,
         ..default()
     });
     let roof_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.42, 0.43, 0.42),
+        base_color: Color::WHITE,
+        base_color_texture: nv_texture("roof", &assets),
         perceptual_roughness: 1.,
         ..default()
     });
@@ -350,7 +405,7 @@ fn setup(
         let size = run.max - run.min;
         let center = (run.min + run.max) * 0.5;
         commands.spawn((
-            Mesh3d(meshes.add(Cuboid::new(size.x, WALL_HEIGHT, size.y))),
+            Mesh3d(meshes.add(textured_box(Vec3::new(size.x, WALL_HEIGHT, size.y)))),
             MeshMaterial3d(wall_material.clone()),
             Transform::from_xyz(center.x, WALL_HEIGHT / 2., center.y),
         ));
@@ -796,7 +851,7 @@ fn draw(
         }
     }
     **status = Text::new(format!(
-        "FALLOUT | 3D region blockout | {} person\nWASD | CapsLock: run | Shift: invert | Ctrl: crouch | Space: jump\nHold right mouse: look | Tab: camera | H: roofs | V: overview | F2/F3: next/previous map | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
+        "FALLOUT | 3D region blockout | {} person\nWASD | CapsLock: run | Shift: invert | Ctrl: crouch | Space: jump\nHold right mouse: look | Tab: camera | H: roofs | V: overview | F2/F3: next/previous map | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Local New Vegas materials when prepared | H: roofs",
         if control.first { "First" } else { "Third" },
         fight.player.hp,
         fight.player.max_hp,

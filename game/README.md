@@ -125,3 +125,7 @@ WASD moves; Caps Lock toggles walk/run and holding left Shift inverts that selec
 The 3D viewer now joins collinear wall sections, using the same rectangular bounds for rendering and player/camera collision. Horizontal gaps are joined only when sampled original walkability marks the intervening tiles blocked; imported doors prevent those joins. Touching vertical sections merge without expanding their occupied bounds. Tests cover blocked/walkable gaps, door separation, vertical merging and collision inside joined sections. The obsolete bevelled pillar mesh was removed.
 
 This is a conservative blockout improvement. Staggered source positions still produce stepped silhouettes, visible in the private first-person capture; accurate wall orientation and architectural reconstruction remain pending. No 1:1 visual fidelity is claimed.
+
+## New Vegas wall and roof textures
+
+Run `python game/prepare-nv-materials.py` with Pillow installed and the local New Vegas installation available. It extracts the installed `nv_noso_rowhouse_plaster.dds` and `gnrroof01.dds` through the existing BSA reader, converting diffuse RGB images into ignored `game/assets/nv/materials`. Prepared textures load automatically in the 3D viewer; missing files fall back to plain white materials. Walls and roof tiles use repeating projected UVs at one texture per two world units. Ground and sprite artwork remain from Fallout 1. This initial shared material pass does not include normal maps or individually matched building materials.
