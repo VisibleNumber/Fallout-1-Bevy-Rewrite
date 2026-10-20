@@ -11,3 +11,4 @@ jobs:
         with:
           node-version: 22
       - run: node tools/fallout-research/test.mjs
+      - run: node tools/fallout-research/bytecode.test.mjs

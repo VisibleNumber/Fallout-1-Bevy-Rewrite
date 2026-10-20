@@ -41,6 +41,7 @@ The tool records the reference commit when available. Reference source is option
 ```powershell
 # Synthetic fixtures only; no game installation required
 node tools/fallout-research/test.mjs
+node tools/fallout-research/bytecode.test.mjs
 
 # After a local scan and the Vault 13 export above
 node tools/fallout-research/test.mjs --integration
@@ -49,6 +50,22 @@ node tools/fallout-research/test.mjs --integration
 Integration checks target the Steam installation used during development (72 maps and 952 scripts). Other editions may differ. Verify decodes effective archive entries and checks recorded installation hashes; it does not execute gameplay.
 
 See [mechanics coverage](tools/fallout-research/MECHANICS.md) and [initial source-derived rule notes](tools/fallout-research/RULES-REFERENCE.md). No affiliation with the original game's creators is implied.
+
+## Script logic and map connections
+
+With the optional reference checkout configured, instruction names and their registration locations are resolved from that local source:
+
+```powershell
+node tools/fallout-research/research.mjs scripts-audit
+node tools/fallout-research/research.mjs disasm scripts/v13cave.int
+node tools/fallout-research/research.mjs map-links maps/v13ent.map
+```
+
+Disassembly writes local JSON under reports/bytecode with instruction offsets, typed constants, reference-source locations, procedure labels, opcode usage and directly adjacent constant call targets. Both string and identifier address spaces are recorded because consumers determine which one applies. Bootstrap instructions are decoded separately from code after the metadata tables. This is structural inspection, not execution, a complete call graph or a high-level decompiler. Branch-dependent execution and indirect targets remain unresolved.
+
+Map connections resolve the map-header script index separately from script-record indices, attach existing object script IDs and preserve nested inventory ownership. Reports also identify spatial trigger records. Runtime-created objects and assignments require execution analysis.
+
+See [script research findings](tools/fallout-research/SCRIPT-RESEARCH.md). After running scripts-audit and the opening map-links command, run `node tools/fallout-research/bytecode.test.mjs --integration` for development-edition coverage checks.
 
 ## Publishing policy
 
