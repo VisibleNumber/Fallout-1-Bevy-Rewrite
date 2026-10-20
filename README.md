@@ -1,6 +1,6 @@
 # Fallout 1 Bevy Rewrite
 
-Research tooling and planning for a future Fallout 1 recreation in Bevy, with a full 3D presentation. No playable Bevy port is included yet.
+Fallout 1 recreation in Bevy. The current target is the original isometric experience using locally owned game assets; 3D presentation is deferred. A first original-art renderer now lives under [game](game/README.md). Gameplay is not yet connected.
 
 This repository contains **no original game assets, extracted game data, saves, engine binaries, or vendored reference-engine source**. You must provide your own local Fallout installation. Research outputs stay local and are ignored by Git.
 
