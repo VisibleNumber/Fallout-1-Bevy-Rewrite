@@ -1,6 +1,8 @@
 // Local asset adapter for the game, never a distributable asset bundle.
 // Floor-to-hex coverage is an initial approximation. Original animation motion
 // offsets and frame timing still require runtime comparison.
+import {execFileSync} from 'node:child_process';
+import {characterStat} from '../tools/fallout-research/character.mjs';
 import fs from 'node:fs';import path from 'node:path';import zlib from 'node:zlib';
 import {indexDat,decodeDat,parseMap,parsePro} from '../tools/fallout-research/research.mjs';
 const root=import.meta.dirname,out=path.join(root,'assets'),game=process.env.FALLOUT_GAME_PATH;if(!game)throw Error('Set FALLOUT_GAME_PATH to your Fallout installation');
@@ -20,5 +22,19 @@ const walking=[];for(let r=0;r<6;r++){const count=frame('art/critters/hmjmpsab.f
 const walkable=Array(40000).fill(false);const floors=map.elevations[0].tiles;for(let t=0;t<40000;t++){const col=199-t%200,row=Math.floor(t/200),i=Math.floor(row/2)*100+99-Math.floor(col/2);if(floors[i]&&![1,70,71].includes(floors[i].floor))walkable[t]=true;}
 const dirs=[[-1,199,200,201,1,-200],[-201,-1,200,1,-199,-200]];for(const o of map.objects){const type=(o.fid>>>24)&15;if(o.tile<0||o.elevation!==0||(o.flags&17)||![1,2,3].includes(type))continue;walkable[o.tile]=false;if(o.flags&2048)for(const delta of dirs[o.tile%2])if(o.tile+delta>=0&&o.tile+delta<40000)walkable[o.tile+delta]=false;}walkable[17690]=true;
 const uiList=read('art/intrface/intrface.lst').toString('latin1').split(/\r?\n/);const ui=[];for(const [id,x,y] of [[16,0,0],[47,211,41],[18,210,62],[6,523,7],[13,526,40],[59,526,78],[57,526,59]]){const name=uiList[id].split(/[,; ]/)[0].toLowerCase();ui.push({...frame('art/intrface/'+name),x,y});}
+
+const reference=process.env.FALLOUT_REFERENCE_PATH||path.resolve(root,'../../fallout-research/reference/fallout1-ce');
+if(!fs.existsSync(path.join(reference,'src')))throw Error('Set FALLOUT_REFERENCE_PATH to the local reference checkout for startup script execution');
+const env={...process.env,FALLOUT_REFERENCE_PATH:reference};const cli=path.join(root,'../tools/fallout-research/research.mjs'),reportRoot=path.join(root,'../tools/fallout-research/reports');
+if(!fs.existsSync(path.join(reportRoot,'prototypes.json')))execFileSync(process.execPath,[cli,'scan'],{env,stdio:'pipe'});
+execFileSync(process.execPath,[cli,'cave-run','maps/v13ent.map','premade/combat.gcd'],{env,stdio:'pipe'});
+const startup=JSON.parse(fs.readFileSync(path.join(reportRoot,'sessions/cave-run.json')));if(startup.status!=='halted')throw Error('Starting inventory script did not complete');
+const pc=startup.world.objects.find(o=>o.id===startup.world.playerId),inventoryNames=read('text/english/game/pro_item.msg').toString('latin1'),messages=new Map([...inventoryNames.matchAll(/\{(\d+)\}\s*\{[^}]*\}\s*\{([^}]*)\}/g)].map(m=>[Number(m[1]),m[2]])),invenList=read('art/inven/inven.lst').toString('latin1').split(/\r?\n/);const inventory=[];
+for(const slot of pc.inventory){const item=startup.world.objects.find(o=>o.id===slot.itemId),proto=protos.get(item.pid),fileName=invenList[proto.inventoryFid&4095].split(/[,; ]/)[0].toLowerCase(),icon=frame('art/inven/'+fileName);const existing=inventory.find(i=>i.pid===item.pid&&i.ammo_quantity===(item.data.ammoQuantity??0));if(existing){existing.quantity+=slot.quantity;continue;}inventory.push({id:item.id,pid:item.pid,name:messages.get(proto.messageId)||('Item '+item.pid),description:messages.get(proto.messageId+1)||'',file:icon.file,quantity:slot.quantity,weight:proto.weight,item_type:proto.itemType,ammo_quantity:item.data.ammoQuantity??0,ammo_capacity:proto.ammoCapacity??0});}
+const inventory_background=frame('art/intrface/'+uiList[48].split(/[,; ]/)[0].toLowerCase());
+
+
+const weapon_art=[];for(const item of inventory.filter(i=>i.item_type===3)){const code=protos.get(item.pid).animationCode;if(!code)continue;const letter=String.fromCharCode(100+code-1),standing=[],walk=[];for(let r=0;r<6;r++){standing.push(frame('art/critters/hmjmps'+letter+'a.frm',r));const count=frame('art/critters/hmjmps'+letter+'b.frm',r).count;walk.push(Array.from({length:count},(_,i)=>frame('art/critters/hmjmps'+letter+'b.frm',r,i)));}weapon_art.push({pid:item.pid,standing,walking:walk});}
+
 const player=[];for(let r=0;r<6;r++)player.push(frame('art/critters/hmjmpsaa.frm',r));const [x,y]=screen(17690);
-fs.writeFileSync(path.join(out,'scene.json'),JSON.stringify({sprites,ui,player,walking,walkable,spawn_tile:17690,spawn:[x+16,y+8],errors,limitations:['Static frames; original sorting/light/roof behavior not yet reproduced.','Player movement is a prototype, not original hex pathfinding.']}));console.log(JSON.stringify({sprites:sprites.length,images:cache.size,errors:errors.length,examples:errors.slice(0,6)}));
+fs.writeFileSync(path.join(out,'scene.json'),JSON.stringify({sprites,ui,inventory,inventory_background,weapon_art,player_name:pc.character.name,hit_points:characterStat(pc.character,7,{gameTime:264600}),armor_class:characterStat(pc.character,9,{gameTime:264600}),player,walking,walkable,spawn_tile:17690,spawn:[x+16,y+8],errors,limitations:['Static frames; original sorting/light/roof behavior not yet reproduced.','Player movement is a prototype, not original hex pathfinding.']}));console.log(JSON.stringify({sprites:sprites.length,images:cache.size,errors:errors.length,examples:errors.slice(0,6)}));

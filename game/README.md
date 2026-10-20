@@ -16,4 +16,16 @@ Run `cargo test --manifest-path game/Cargo.toml` from the repository root for sy
 
 Assets are generated privately in game/assets and ignored by Git. No original game data is shipped. The source 3D scene is separate and is not used here.
 
-The original bottom interface artwork is now displayed at its native 640-by-100 size, centered at the bottom of the window. Buttons are visual only, and any numbers baked into that art are not live character statistics. Interface clicks do not issue walking orders. Flat map objects use a separate ground rendering layer. Exact wall occlusion remains incomplete. Clicking during a walk replaces the remaining route after the active step completes.
+The original bottom interface artwork is displayed at its native 640-by-100 size, centered at the bottom of the window. The inventory button works; other buttons remain visual only. HP and AC now show imported initial character values, covering the example numbers baked into the background. Combat does not update those values yet. Interface clicks do not issue walking orders. Flat map objects use a separate ground rendering layer. Exact wall occlusion remains incomplete. Clicking during a walk replaces the remaining route after the active step completes.
+
+## Inventory and weapon selection
+
+I or the inventory button opens the original inventory background. Click an item or use Up/Down to inspect original names, descriptions, quantities and icons. E/Enter or the right-hand slot selects a weapon; I/Esc or Done closes the screen. Weapon selection changes the bar icon and the character's original standing/walking weapon sprites. Inventory pauses movement. Original drag/drop, consumable use, ammunition operations, combat and equipment effects are not yet implemented. Presentation groups identical starting entries for display; this is not a complete implementation of original stacking rules.
+
+Starting items come from executing the effective opening controller script for Max Stone during asset preparation. This currently requires a local reference source checkout for opcode registration names: set FALLOUT_REFERENCE_PATH as described in the repository README. Preparation invokes the existing startup simulation, keeping generated data private. Initial skill/stat calculations have the documented simulation limits.
+
+## Quicksave
+
+F5 stores position, facing and selected weapon; F9 restores them. Saves are validated against current walkable tiles and known weapons. Saving waits for the active movement step to finish. The local file is game/assets/quicksave.json, ignored by Git. This is a small rewrite-specific save, not original Fallout save compatibility and not a complete world/inventory snapshot. Inventory quantities cannot yet change in gameplay.
+
+`--inventory-smoke` opens inventory, selects the pistol, captures open and closed views, verifies a save-file round trip and exits. `cargo test` covers the inventory model and save validation alongside navigation. Generated screenshots and save files stay local.
