@@ -61,6 +61,8 @@ pub struct Fight {
     pub looted: Vec<i32>,
     pub participants: Vec<i32>,
     pub story: crate::dialogue::Story,
+    pub original: crate::original_dialogue::State,
+    pub script_awards: std::collections::BTreeMap<i32, i32>,
     seed: u64,
 }
 impl Fight {
@@ -86,6 +88,8 @@ impl Fight {
             looted: Vec::new(),
             participants: Vec::new(),
             story: crate::dialogue::Story::default(),
+            original: crate::original_dialogue::State::default(),
+            script_awards: std::collections::BTreeMap::new(),
             seed: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -501,6 +505,10 @@ struct Checkpoint {
     #[serde(default)]
     story: crate::dialogue::Story,
     #[serde(default)]
+    original: crate::original_dialogue::State,
+    #[serde(default)]
+    script_awards: std::collections::BTreeMap<i32, i32>,
+    #[serde(default)]
     participants: Vec<i32>,
     seed: u64,
     inventory: Vec<ItemState>,
@@ -537,6 +545,8 @@ fn checkpoint(
     let checkpoint = Checkpoint {
         schema: 3,
         story: fight.story.clone(),
+        original: fight.original.clone(),
+        script_awards: fight.script_awards.clone(),
         participants: fight.participants.clone(),
         seed: fight.seed,
         inventory: bag
@@ -560,6 +570,18 @@ fn checkpoint(
 }
 fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<(), String> {
     c.story.validate(&data.dialogue_definition)?;
+    c.original.validate()?;
+    if c.original.loading {
+        return Err("Cannot save while the original dialogue worker is loading".into());
+    }
+    for (item_id, quantity) in &c.script_awards {
+        if !data.inventory.iter().any(|item| item.id == *item_id)
+            || *quantity < 0
+            || *quantity > 1_000_000
+        {
+            return Err("Invalid original-script inventory allowance".into());
+        }
+    }
     if c.schema != 3 {
         return Err("Unsupported checkpoint version".into());
     }
@@ -597,9 +619,13 @@ fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<()
             .filter(|x| c.looted.contains(&x.id))
             .flat_map(|x| &x.contents)
             .filter(|x| x.item_id == item.id)
-            .map(|x| x.quantity)
-            .sum::<i32>();
-        if state.id != item.id || state.quantity < 0 || state.quantity > item.quantity + gained {
+            .map(|x| i64::from(x.quantity))
+            .sum::<i64>();
+        let script_award = i64::from(c.script_awards.get(&item.id).copied().unwrap_or(0));
+        if state.id != item.id
+            || state.quantity < 0
+            || i64::from(state.quantity) > i64::from(item.quantity) + gained + script_award
+        {
             return Err("Invalid inventory quantity or identity".into());
         }
         let cap = if item.item_type == 4 {
@@ -693,6 +719,8 @@ pub fn load_checkpoint(
     validate_checkpoint(&c, data, bag)?;
     // Apply only after the complete snapshot passes validation.
     fight.story = c.story;
+    fight.original = c.original;
+    fight.script_awards = c.script_awards;
     fight.seed = c.seed;
     fight.attack_time = 0.;
     fight.player = c.combat.player;

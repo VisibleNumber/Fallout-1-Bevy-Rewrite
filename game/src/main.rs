@@ -12,6 +12,8 @@ mod interface;
 mod inventory;
 mod inventory_ui;
 mod navigation;
+mod original_dialogue;
+mod original_dialogue_ui;
 mod save;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 #[derive(Clone, Deserialize)]
@@ -109,6 +111,7 @@ fn main() {
     let bag = inventory_ui::Bag::new(data.inventory.clone());
     let fight = combat_ui::Fight::new(&data);
     App::new()
+        .init_resource::<original_dialogue_ui::Job>()
         .insert_resource(fight)
         .insert_resource(bag)
         .insert_resource(data)
@@ -136,6 +139,8 @@ fn main() {
             (
                 inventory_ui::actions.run_if(dialogue_ui::in_game),
                 dialogue_ui::controls,
+                original_dialogue_ui::smoke,
+                original_dialogue_ui::controls,
                 combat_ui::item_actions.run_if(dialogue_ui::in_game),
                 combat_ui::actions.run_if(dialogue_ui::in_game),
                 interaction::examine.run_if(dialogue_ui::in_game),
@@ -146,6 +151,7 @@ fn main() {
                 combat_ui::render,
                 interface::update,
                 dialogue_ui::refresh,
+                original_dialogue_ui::refresh,
                 combat_ui::journey_smoke,
                 combat_ui::smoke,
                 combat_ui::items_smoke,
@@ -413,7 +419,7 @@ fn walk(
         m.progress = 0.;
     }
     **hud = Text::new(format!(
-        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | T briefing | R reload | G search | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
+        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | T briefing | Y Overseer | R reload | G search | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
         m.tile,
         m.path.len(),
         m.message,
@@ -546,6 +552,12 @@ fn save_input(
     mut camera: Single<&mut Transform, (With<Camera>, Without<Player>)>,
 ) {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/quicksave.json");
+    if fight.original.loading {
+        if keys.just_pressed(KeyCode::F5) || keys.just_pressed(KeyCode::F9) {
+            motion.message = "Wait for the dialogue script before saving or loading".into();
+        }
+        return;
+    }
     if keys.just_pressed(KeyCode::F5) {
         motion.message = if motion.progress > 0. {
             "Finish moving before saving".into()

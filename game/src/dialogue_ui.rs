@@ -11,7 +11,7 @@ pub(crate) struct DialogueChoice {
     pub choice: String,
 }
 pub fn in_game(fight: Res<Fight>) -> bool {
-    fight.story.active.is_none()
+    fight.story.active.is_none() && !fight.original.open
 }
 
 pub fn controls(
@@ -22,6 +22,9 @@ pub fn controls(
     mut motion: ResMut<Motion>,
     buttons: Query<(&Interaction, &DialogueChoice), Changed<Interaction>>,
 ) {
+    if fight.original.open {
+        return;
+    }
     if fight.story.active.is_none() {
         if keys.just_pressed(KeyCode::KeyT) && !bag.open && motion.progress == 0. {
             if fight.active || fight.player.hp == 0 || fight.attack_time > 0. {

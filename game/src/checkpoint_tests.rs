@@ -326,6 +326,79 @@ fn checkpoint_preserves_and_validates_encounter_participants() {
 }
 
 #[test]
+fn checkpoint_roundtrips_original_dialogue_and_script_inventory_awards() {
+    let data = scene();
+    let (mut fight, mut bag, mut motion) = setup(&data);
+    let session = serde_json::json!({
+        "script": "over",
+        "step": 2,
+        "view": {
+            "open": true,
+            "reply": {"listId": 55, "text": "You have done well."},
+            "options": [{"text": "Continue", "procedure": "i208", "reaction": 50, "continue": false}]
+        },
+        "world": {
+            "schema": 1,
+            "playerId": 1,
+            "objects": [{"id": 1, "pid": 16777216, "inventory": []}]
+        }
+    });
+    fight.original = crate::original_dialogue::State {
+        open: true,
+        loading: false,
+        session: Some(session.clone()),
+        view: Some(serde_json::from_value(session["view"].clone()).unwrap()),
+        error: None,
+    };
+    fight.script_awards.insert(13, 2);
+    bag.inventory.items[3].quantity = 2;
+
+    let path = temp_file();
+    save_checkpoint(&path, &data, &fight, &bag, &motion).unwrap();
+    fight.original = crate::original_dialogue::State::default();
+    fight.script_awards.clear();
+    bag.inventory.items[3].quantity = 0;
+    load_checkpoint(&path, &data, &mut fight, &mut bag, &mut motion).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(fight.original.session, Some(session));
+    assert_eq!(
+        fight
+            .original
+            .view
+            .as_ref()
+            .unwrap()
+            .reply
+            .as_ref()
+            .unwrap()
+            .text,
+        "You have done well."
+    );
+    assert_eq!(fight.script_awards.get(&13), Some(&2));
+    assert_eq!(bag.inventory.items[3].quantity, 2);
+}
+
+#[test]
+fn checkpoint_rejects_pending_dialogue_and_invalid_script_awards() {
+    let data = scene();
+    let (mut fight, bag, motion) = setup(&data);
+    fight.original.loading = true;
+    assert!(checkpoint(&data, &fight, &bag, &motion).is_err());
+
+    fight.original = crate::original_dialogue::State::default();
+    let base = checkpoint(&data, &fight, &bag, &motion).unwrap();
+    let mut unknown_item = clone_checkpoint(&base);
+    unknown_item.script_awards.insert(999, 1);
+    assert!(validate_checkpoint(&unknown_item, &data, &bag).is_err());
+    let mut negative = clone_checkpoint(&base);
+    negative.script_awards.insert(13, -1);
+    assert!(validate_checkpoint(&negative, &data, &bag).is_err());
+    let mut over_limit = clone_checkpoint(&base);
+    over_limit.script_awards.insert(13, 1_000_001);
+    assert!(validate_checkpoint(&over_limit, &data, &bag).is_err());
+}
+
+#[test]
 fn attacked_distant_rat_still_takes_its_turn() {
     let data = scene();
     let (mut fight, _bag, mut motion) = setup(&data);

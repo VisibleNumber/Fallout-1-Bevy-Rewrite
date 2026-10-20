@@ -26,3 +26,9 @@ Local screenshots:
 - `game/assets/journey-smoke.png`: cave after conversation, combat and restore.
 
 Local save fixtures are `briefing-save-smoke.json` and `journey-save-smoke.json` under `game/assets/`. They and all screenshots are ignored by Git. Synthetic unit tests separately cover hidden choices, stale menu actions, atomic failures, conditions, and persistence of conversation/quest state. The journey check complements these tests; a successful compile is insufficient.
+
+## Original script conversation
+
+Outside combat, press Y to access the actual Overseer script. This temporary access does not place an NPC in the cave. Select a response; verify that the next reply comes from the original script, then finish the conversation. Open it again and confirm the Overseer now asks a different question. Save mid-conversation with F5, advance, then F9: the original reply, choices and VM variables should restore together. Esc pauses; Y resumes. Saving/loading while a worker request is pending must wait.
+
+`--original-dialogue-smoke` exercises this complete asynchronous UI path with the actual installed `OVER.INT`, including native inventory reconciliation, save/load both mid-conversation and after completion, and a changed original reply on return. Private captures are `original-dialogue-smoke.png` and `original-dialogue-return-smoke.png`; its checkpoint is `original-dialogue-smoke-save.json` under `game/assets/`.
