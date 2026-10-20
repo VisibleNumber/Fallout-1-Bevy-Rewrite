@@ -32,3 +32,6 @@ game/assets/
 *.log
 .env
 .env.*
+
+**/__pycache__/
+*.pyc
