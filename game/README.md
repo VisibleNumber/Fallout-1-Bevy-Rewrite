@@ -15,3 +15,5 @@ Left-click ground to walk, WASD pans the view, and R resets. Walking follows the
 Run `cargo test --manifest-path game/Cargo.toml` from the repository root for synthetic navigation checks. Run the executable with `--smoke` for an automated local route traversal, screenshot and exit. That check requires prepared local assets and a graphics-capable desktop.
 
 Assets are generated privately in game/assets and ignored by Git. No original game data is shipped. The source 3D scene is separate and is not used here.
+
+The original bottom interface artwork is now displayed at its native 640-by-100 size, centered at the bottom of the window. Buttons are visual only, and any numbers baked into that art are not live character statistics. Interface clicks do not issue walking orders. Flat map objects use a separate ground rendering layer. Exact wall occlusion remains incomplete. Clicking during a walk replaces the remaining route after the active step completes.
