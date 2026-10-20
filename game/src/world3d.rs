@@ -22,6 +22,8 @@ struct Floor {
 }
 #[derive(Deserialize)]
 struct Prop {
+    #[serde(default)]
+    source_id: i32,
     file: String,
     w: f32,
     h: f32,
@@ -125,6 +127,8 @@ struct Controller {
 struct Card;
 #[derive(Component)]
 struct Avatar;
+#[derive(Component)]
+struct ModelAvatar;
 #[derive(Component)]
 struct Npc(usize);
 #[derive(Component)]
@@ -254,6 +258,7 @@ pub fn run() {
                 combat_ui::item_actions,
                 inventory_ui::refresh,
                 draw,
+                update_model_avatar,
                 smoke,
                 switch_map,
             )
@@ -456,6 +461,25 @@ fn setup(
         }
     }
     for f in &art.props {
+        let lamp = "nv/converted/nvstreetlight01/model.gltf";
+        let lamp_name = data
+            .examinables
+            .iter()
+            .find(|e| e.id == f.source_id)
+            .map(|e| e.name.to_lowercase())
+            .unwrap_or_default();
+        if matches!(
+            lamp_name.as_str(),
+            "street light" | "streetlight" | "lamp post" | "lamppost" | "street lamp"
+        ) && local_asset(lamp)
+        {
+            commands.spawn((
+                SceneRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(lamp))),
+                Transform::from_xyz(f.x, -0.0377556 * 0.5, f.z).with_scale(Vec3::splat(0.5)),
+            ));
+            continue;
+        }
+
         if f.door {
             let mut neighbors: Vec<&Prop> = art
                 .props
@@ -563,6 +587,14 @@ fn setup(
                 ),
             ));
         }
+    }
+    let player_model = "nv/converted/m01_vaultsuit/model.gltf";
+    if local_asset(player_model) {
+        commands.spawn((
+            ModelAvatar,
+            SceneRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(player_model))),
+            Transform::default(),
+        ));
     }
     let f = &data.player[2];
     commands.spawn((
@@ -771,6 +803,7 @@ fn draw(
     mut camera: Single<&mut Transform, (With<Camera3d>, Without<Card>)>,
     mut status: Single<&mut Text, With<Status>>,
     mut roofs: Query<&mut Visibility, (With<Roof>, Without<Card>)>,
+    models: Query<(), With<ModelAvatar>>,
     motion: Res<Motion>,
     fight: Res<combat_ui::Fight>,
 ) {
@@ -816,7 +849,7 @@ fn draw(
     for (mut transform, handle, npc, avatar, mut visible) in &mut cards {
         transform.rotation = Quat::from_rotation_y(control.yaw);
         let frame = if avatar.is_some() {
-            *visible = if control.first {
+            *visible = if control.first || !models.is_empty() {
                 Visibility::Hidden
             } else {
                 Visibility::Visible
@@ -1016,6 +1049,7 @@ fn switch_map(
             With<Camera3d>,
             With<Status>,
             With<DirectionalLight>,
+            With<SceneRoot>,
         )>,
     >,
 ) {
@@ -1177,4 +1211,30 @@ fn movement_smoke(
         }
     }
     *stage += 1;
+}
+
+fn local_asset(file: &str) -> bool {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("assets")
+        .join(file)
+        .exists()
+}
+fn update_model_avatar(
+    control: Res<Controller>,
+    mut models: Query<(&mut Transform, &mut Visibility), With<ModelAvatar>>,
+) {
+    for (mut transform, mut visibility) in &mut models {
+        *visibility = if control.first {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+        transform.translation = Vec3::new(
+            control.position.x,
+            control.height - 0.003978,
+            control.position.y,
+        );
+        transform.rotation = Quat::from_rotation_y(control.yaw);
+        transform.scale = Vec3::new(1., if control.crouched { 0.65 } else { 1. }, 1.);
+    }
 }

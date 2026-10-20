@@ -50,7 +50,7 @@ for root in data.roots:
     if any(i<0 or i>=len(vertices) for tri in tris for i in tri):raise ValueError('Invalid triangle index')
     attributes={'POSITION':accessor(vertices,'fff','VEC3',5126,34962)}
     if normals:attributes['NORMAL']=accessor(normals,'fff','VEC3',5126,34962)
-    if len(geom.uv_sets):attributes['TEXCOORD_0']=accessor([(v.u,1-v.v) for v in geom.uv_sets[0]],'ff','VEC2',5126,34962)
+    if len(geom.uv_sets):attributes['TEXCOORD_0']=accessor([(v.u,v.v) for v in geom.uv_sets[0]],'ff','VEC2',5126,34962)
     material={'pbrMetallicRoughness':{'metallicFactor':0,'roughnessFactor':0.85},'doubleSided':True}
     texture_set=None
     for prop in shape.properties:
