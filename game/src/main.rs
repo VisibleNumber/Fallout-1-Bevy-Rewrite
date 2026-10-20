@@ -16,6 +16,7 @@ mod original_dialogue;
 mod original_dialogue_ui;
 mod save;
 mod travel;
+mod world3d;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 #[derive(Clone, Deserialize)]
 struct Frame {
@@ -99,6 +100,10 @@ fn point(tile: i32) -> Vec2 {
     Vec2::new(x, y)
 }
 fn main() {
+    if std::env::args().any(|a| a == "--3d" || a == "--3d-smoke") {
+        world3d::run();
+        return;
+    }
     let raw = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene.json"))
         .expect("Run node game/prepare.mjs first");
     let data: SceneData = serde_json::from_str(&raw).unwrap();

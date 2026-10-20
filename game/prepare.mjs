@@ -60,5 +60,43 @@ const pages=[];for(const id of briefing.messages){const text=overMessages.get(id
 const dialogue_definition={id:briefing.id,speaker:briefing.speaker,start:'page-0',flags:briefing.flags,nodes:Object.fromEntries(pages.map((text,i)=>['page-'+i,{text,choices:[{id:i===pages.length-1?'enter_cave':'continue',label:i===pages.length-1?'Enter the cave':'Continue',next:i===pages.length-1?null:'page-'+(i+1),effects:i===pages.length-1?briefing.finish_effects:[]}]}]))};
 const dialogue_portrait=frame('art/heads/ovrsrnf1.frm');
 const exit_grids=map.objects.filter(o=>o.tile>=0&&o.elevation===0&&Number.isInteger(o.data?.map)&&Number.isInteger(o.data?.tile)).map(o=>({tile:o.tile,map:o.data.map,destination_tile:o.data.tile,elevation:o.data.elevation??0,rotation:o.data.rotation??0}));
-const scene={map_name:mapName,map_number:map.mapNumber,exit_grids,world_map,dialogue_definition,dialogue_portrait,examinables,ap_light,carry_weight:characterStat(pc.character,12),loot_catalog:loot_containers,loot_containers:mapName==='v13ent'?loot_containers:[],unarmed_attacking,shot_blocked,actors,weapons,unarmed,player_combat,sprites,ui,inventory,inventory_background,weapon_art,player_name:pc.character.name,hit_points:characterStat(pc.character,7,{gameTime:264600}),armor_class:characterStat(pc.character,9,{gameTime:264600}),player,walking,walkable,spawn_tile:spawnTile,spawn:[x+16,y+8],errors,limitations:['Original sorting/light/roof behavior not yet reproduced.','Player movement and cave combat are prototypes; full original behavior is incomplete.']};
+// Geometry carries original bitmap references only; generated content remains local.
+const groundPoint=(x,y)=>[(12*x-16*y)/384,(6*x+24*y)/384];
+// Find an opaque original-art rectangle for solid wall surfaces. No pixels are repainted.
+const wallPatches=new Map();
+function wallPatch(name,rotation){
+ const key=name+':'+rotation;if(wallPatches.has(key))return wallPatches.get(key);
+ const b=read(name),at=62+b.readUInt32BE(34+rotation*4),w=b.readUInt16BE(at),h=b.readUInt16BE(at+2),pixels=b.subarray(at+12,at+12+w*h);
+ const heights=Array(w).fill(0);let best={area:0,x:0,y:0,w:1,h:1};
+ for(let y=0;y<h;y++){
+  for(let x=0;x<w;x++)heights[x]=pixels[y*w+x]!==0?heights[x]+1:0;
+  const stack=[];
+  for(let x=0;x<=w;x++){
+   const current=x<w?heights[x]:0;let start=x;
+   while(stack.length&&stack.at(-1).height>current){const col=stack.pop(),width=x-col.start,area=width*col.height;start=col.start;if(area>best.area)best={area,x:col.start,y:y-col.height+1,w:width,h:col.height};}
+   if(!stack.length||stack.at(-1).height<current)stack.push({start,height:current});
+  }
+ }
+ if(best.area<16)throw Error('No opaque wall texture region: '+name);
+ const inset=0.5,uv=[(best.x+inset)/w,(best.y+inset)/h,(best.x+best.w-inset)/w,(best.y+best.h-inset)/h];wallPatches.set(key,uv);return uv;
+}
+const view3d={floors:[],props:[],roofs:[]};
+for(let i=0;i<floorLayer.tiles.length;i++){
+ const id=floorLayer.tiles[i].floor;if([1,70,71].includes(id))continue;
+ const f=frame('art/tiles/'+lists.tiles[id]),c=99-i%100,r=Math.floor(i/100);
+ view3d.floors.push({file:f.file,x:2*c-0.5,z:2*r+0.75});
+}
+for(let i=0;i<floorLayer.tiles.length;i++){
+ const id=floorLayer.tiles[i].roof;if([1,70,71].includes(id))continue;
+ const f=frame('art/tiles/'+lists.tiles[id]),c=99-i%100,r=Math.floor(i/100);
+ view3d.roofs.push({file:f.file,x:2*c-0.5,z:2*r+0.75});
+}
+for(const o of map.objects.filter(o=>o.tile>=0&&o.elevation===0&&!(o.flags&1))){
+ const kind=(o.fid>>>24)&15;if(![0,2,3].includes(kind))continue;
+ const name=lists[types[kind]][o.fid&4095];
+ if(!name||['block.frm','scrblk.frm','trnblk.frm','reserved.frm'].includes(name))continue;
+ const f=frame('art/'+types[kind]+'/'+name,o.rotation),[sx,sy]=screen(o.tile),[x,z]=groundPoint(sx+16,sy+8);
+ view3d.props.push({file:f.file,w:f.w,h:f.h,x,z,kind,tile:o.tile,solid:kind===3&&!(o.flags&8)&&f.h>25,uv:kind===3&&!(o.flags&8)&&f.h>25?wallPatch('art/'+types[kind]+'/'+name,o.rotation):[0,0,1,1]});
+}
+const scene={view3d,map_name:mapName,map_number:map.mapNumber,exit_grids,world_map,dialogue_definition,dialogue_portrait,examinables,ap_light,carry_weight:characterStat(pc.character,12),loot_catalog:loot_containers,loot_containers:mapName==='v13ent'?loot_containers:[],unarmed_attacking,shot_blocked,actors,weapons,unarmed,player_combat,sprites,ui,inventory,inventory_background,weapon_art,player_name:pc.character.name,hit_points:characterStat(pc.character,7,{gameTime:264600}),armor_class:characterStat(pc.character,9,{gameTime:264600}),player,walking,walkable,spawn_tile:spawnTile,spawn:[x+16,y+8],errors,limitations:['Original sorting/light/roof behavior not yet reproduced.','Player movement and cave combat are prototypes; full original behavior is incomplete.']};
 fs.writeFileSync(path.join(out,`scene-${mapName}.json`),JSON.stringify(scene));if(mapName==='v13ent')fs.writeFileSync(path.join(out,'scene.json'),JSON.stringify(scene));console.log(JSON.stringify({map:mapName,spawnTile,exits:exit_grids.length,sprites:sprites.length,images:cache.size,errors:errors.length,examples:errors.slice(0,6)}));

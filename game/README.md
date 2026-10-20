@@ -83,3 +83,13 @@ F5/F9 now save and restore the entire visited-location collection across restart
 `--travel-smoke` visits all four maps, checks health/inventory/story and cave encounter state on return, saves and restores at Shady Sands, then selects a destination through the actual world-menu button handler. It also writes a campaign save, clears in-memory visits to simulate a fresh session, reloads all maps and confirms an inactive-map corruption rejects atomically. Private screenshots are `shady-sands-smoke.png` and `world-travel-smoke.png` under `game/assets/`.
 
 `--campaign-load-smoke` must run after `--travel-smoke` in a separate process. It starts in the default cave, restores the saved Vault 13 campaign and returns to the cave to verify defeated rats, story and consumed inventory survived the process restart.
+
+## Original-art first/third-person prototype
+
+Prepare local assets with `node game/prepare-world.mjs`, then start `cargo run --manifest-path game/Cargo.toml -- --3d`. The default launch remains the 2D rewrite. The 3D mode loads one Shady Sands west block, with WASD movement, right-mouse drag to look, Tab to switch cameras, Shift to run, I for the shared inventory, and E to identify a nearby NPC.
+
+The ground mesh maps the original isometric floor diamonds into 3D. Solid wall sections occupy imported wall positions, and roof surfaces use the original roof-tile grid. Wall faces sample opaque rectangles of the original installed wall images through UV coordinates; pixels are not repainted or AI-generated. Materials are unlit and textures use nearest-neighbor filtering to retain the original palette and baked shading. Player movement checks both the original walkability grid and the solid wall footprint; the follow camera retracts before passing through a wall.
+
+This is an early geometry conversion, not a finished 3D recreation. Wall thickness/height are provisional, repeated texture patches and corners need alignment, doors are not interactive, and roof/camera behavior needs refinement. NPCs, the avatar and furniture remain directional/billboard sprites. NPC dialogue, combat, 3D campaign saving, map travel and full streaming are not connected in this separate view. The rendered block is limited to roughly 25 map units around the starting point.
+
+`--3d-smoke` renders deterministic third- and first-person views and exits; screenshots remain private under `game/assets/third-person-smoke.png` and `first-person-smoke.png`. Rust tests cover the original hex/3D coordinate conversion, wall collision at faces/corners and closed wall mesh texture bounds.
