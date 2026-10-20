@@ -76,13 +76,27 @@ node tools/fallout-research/research.mjs vm-readiness
 node tools/fallout-research/research.mjs vm-probe scripts/v13cave.int map_enter_p_proc
 ```
 
-The integer VM subset executes arithmetic, comparisons, branches, stack frames, internal calls and stack-addressed program variables. It bounds execution steps and stack sizes. Unsupported operations stop explicitly. It is not a playable engine or a complete VM; strings, floats, object pointers, external programs and scheduler callbacks remain unsupported.
+The VM subset executes integer arithmetic, comparisons, branches, stack frames, internal calls and stack-addressed program variables. Tagged object pointers survive stack transfers and storage. Resolved identifier constants support script-exported variables. It bounds execution steps and stack sizes. Unsupported operations stop explicitly. It is not a playable engine or a complete VM; general string expressions, floats, external programs and scheduler callbacks remain unsupported.
 
 `vm-probe` writes a local trace under reports/vm. Named procedures use a synthetic zero-argument frame and a return sentinel; they do not load the original program's initialized globals or a real game state. `vm-readiness` starts each script's bootstrap with no world bindings and reports its first blocker. A halted bootstrap is not evidence that the full script or campaign works.
 
 An optional third argument to vm-probe supplies a local JSON scalar context after the procedure name. Supported explicit properties are mapFlags, scriptAction, mapIndex, gameTime, partyCount, isLoadingGame, gameGlobals, mapGlobals and scriptLocals. Variable scopes use indexed JSON objects. Missing values stop rather than defaulting to invented state. Only the first-run/party-count/loadgame metarule queries are supported. Object movement, inventory and other world changes are not stubbed. Changes to supplied variable scopes are recorded in the report and never written back to the input JSON.
 
 The scalar context and VM traces are research fixtures, not save-game imports or verified original behavior. Refer to SCRIPT-RESEARCH.md for remaining execution work.
+
+## Opening-cave startup simulation
+
+```powershell
+node tools/fallout-research/research.mjs cave-run
+node tools/fallout-research/research.mjs cave-run maps/v13ent.map premade/diplomat.gcd
+node tools/fallout-research/cave-run.test.mjs --integration
+```
+
+This headless simulation imports the local map, object prototypes, nested inventory, game-global defaults and a premade player GCD. It executes the actual effective map-controller bytecode from bootstrap with the map-enter action. It applies logical entry placement, structural item creation/transfers, initial stat/skill/trait queries, scoped variables and ambient light state. It does not substitute a handwritten startup inventory.
+
+All three premade character startup paths complete in the development installation: combat and stealth use 581 VM steps, diplomat uses 569. The local report is reports/sessions/cave-run.json. The integration test preserves separate reports for each premade character and verifies pointer ownership, initialized weapon ammunition and snapshot round trips. Both game data and reports remain excluded from Git.
+
+The world model does not yet simulate collision, animation, equipment, inventory merging, combat, AI updates or script scheduling. Its snapshots are a new research format, not original Fallout saves. Initialization uses the reference new-game clock, no Night Vision perk, and installed game difficulty. Initial character calculations exclude perks, equipment and temporary conditions; they preserve the reference's Night Person time condition. Full original-engine comparisons remain necessary. See [Bevy world-state contract](tools/fallout-research/WORLD-CONTRACT.md).
 
 ## Publishing policy
 

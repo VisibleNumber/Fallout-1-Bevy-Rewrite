@@ -35,4 +35,10 @@ The cave's map-enter procedure first queries whether the map is newly entered. W
 
 The optional scalar host distinguishes game globals, map globals and per-script locals, requires supplied values, and records variable writes. It implements selected read-only metarule queries. This is useful for controlled probes but is not a model of the complete world.
 
+## Opening cave startup completion
+
+The newer cave-run command replaces the earlier scalar-only blocker experiment with a local map/object model and imported player GCD. It executes bootstrap initialization, exported variables and the map-entry controller path for each original premade character. The controller completes for all three records with no unsupported operation on these paths. The player's initial inventory is produced by script execution, with prototype-backed weapon ammunition initialized. This does not execute every other procedure or the map's object/spatial scripts.
+
+The VM now supports tagged object pointers and resolved identifier constants. The structural world model supplies object lookup, selected prototype data, creation and inventory transfers, player placement and ambient light. Initial skill/trait calculations are reference-derived and require the relevant clock/difficulty context. Night Person preserves the literal reference threshold, including its midnight behavior, rather than applying an assumed day/night schedule.
+
 No full script VM, original-engine runtime trace, high-level decompilation or verified Rust rules implementation is claimed by the current tool.

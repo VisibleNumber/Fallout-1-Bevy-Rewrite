@@ -14,3 +14,8 @@ jobs:
       - run: node tools/fallout-research/bytecode.test.mjs
       - run: node tools/fallout-research/vm.test.mjs
       - run: node tools/fallout-research/scalar-host.test.mjs
+      - run: node tools/fallout-research/pointer-vm.test.mjs
+      - run: node tools/fallout-research/world.test.mjs
+      - run: node tools/fallout-research/world-host.test.mjs
+      - run: node tools/fallout-research/character.test.mjs
+      - run: node tools/fallout-research/variables.test.mjs
