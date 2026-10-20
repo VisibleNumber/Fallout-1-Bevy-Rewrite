@@ -46,6 +46,8 @@ fn scene() -> SceneData {
     healing.heal_max = 8;
 
     SceneData {
+        dialogue_definition:serde_json::from_str(r#"{"id":"briefing","speaker":"NPC","start":"hello","flags":["water_chip_search"],"nodes":{"hello":{"text":"Synthetic dialogue","choices":[{"id":"end","label":"Done","next":null,"effects":[{"flag":"water_chip_search","value":1}]}]}}}"#).unwrap(),
+        dialogue_portrait:frame(),
         examinables: Vec::new(),
         ap_light: frame(),
         carry_weight: 100,
@@ -334,4 +336,35 @@ fn attacked_distant_rat_still_takes_its_turn() {
     rats_turn(&data, &mut fight, &mut motion);
     assert_ne!(fight.rats[0].tile, 115);
     assert!(fight.active);
+}
+
+#[test]
+fn checkpoints_restore_mid_conversation_and_completed_quest_without_rendering() {
+    let data = scene();
+    let (mut fight, mut bag, mut motion) = setup(&data);
+    fight.story.begin(&data.dialogue_definition).unwrap();
+    let mid = fight.story.clone();
+    let file = temp_file();
+    save_checkpoint(&file, &data, &fight, &bag, &motion).unwrap();
+    fight
+        .story
+        .choose(&data.dialogue_definition, "hello", "end")
+        .unwrap();
+    assert_eq!(fight.story.flags.get("water_chip_search"), Some(&1));
+    load_checkpoint(&file, &data, &mut fight, &mut bag, &mut motion).unwrap();
+    assert_eq!(fight.story, mid);
+    fight
+        .story
+        .choose(&data.dialogue_definition, "hello", "end")
+        .unwrap();
+    let completed = fight.story.clone();
+    save_checkpoint(&file, &data, &fight, &bag, &motion).unwrap();
+    fight.story = crate::dialogue::Story::default();
+    load_checkpoint(&file, &data, &mut fight, &mut bag, &mut motion).unwrap();
+    assert_eq!(fight.story, completed);
+    let mut invalid = checkpoint(&data, &fight, &bag, &motion).unwrap();
+    invalid.story.flags.insert("unknown_quest".into(), 1);
+    assert!(validate_checkpoint(&invalid, &data, &bag).is_err());
+    assert_eq!(fight.story, completed);
+    std::fs::remove_file(file).unwrap();
 }

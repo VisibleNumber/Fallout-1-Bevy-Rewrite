@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 mod combat;
 mod combat_ui;
 mod damage;
+mod dialogue;
+mod dialogue_ui;
 mod distance;
 mod interaction;
 mod interface;
@@ -43,6 +45,8 @@ struct Placed {
 }
 #[derive(Deserialize, Resource)]
 struct SceneData {
+    dialogue_definition: dialogue::Definition,
+    dialogue_portrait: Frame,
     examinables: Vec<interaction::Examinable>,
     ap_light: Frame,
     carry_weight: i32,
@@ -90,6 +94,9 @@ fn main() {
     let raw = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/scene.json"))
         .expect("Run node game/prepare.mjs first");
     let data: SceneData = serde_json::from_str(&raw).unwrap();
+    data.dialogue_definition
+        .validate()
+        .expect("Valid dialogue content");
     let motion = Motion {
         tile: data.spawn_tile,
         from: data.spawn_tile,
@@ -127,16 +134,19 @@ fn main() {
         .add_systems(
             Update,
             (
-                inventory_ui::actions,
-                combat_ui::item_actions,
-                combat_ui::actions,
-                interaction::examine,
+                inventory_ui::actions.run_if(dialogue_ui::in_game),
+                dialogue_ui::controls,
+                combat_ui::item_actions.run_if(dialogue_ui::in_game),
+                combat_ui::actions.run_if(dialogue_ui::in_game),
+                interaction::examine.run_if(dialogue_ui::in_game),
                 save_input,
-                input,
-                walk,
+                input.run_if(dialogue_ui::in_game),
+                walk.run_if(dialogue_ui::in_game),
                 inventory_ui::refresh,
                 combat_ui::render,
                 interface::update,
+                dialogue_ui::refresh,
+                combat_ui::journey_smoke,
                 combat_ui::smoke,
                 combat_ui::items_smoke,
                 inventory_smoke,
@@ -403,7 +413,7 @@ fn walk(
         m.progress = 0.;
     }
     **hud = Text::new(format!(
-        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | R reload | G search | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
+        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | T briefing | R reload | G search | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
         m.tile,
         m.path.len(),
         m.message,

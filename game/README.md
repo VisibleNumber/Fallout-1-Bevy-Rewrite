@@ -14,6 +14,12 @@ cargo run --manifest-path game/Cargo.toml
 
 All extracted artwork, map records, screenshots and saves stay in ignored local folders. The repository ships source and synthetic tests only. Preparation executes the opening controller script for Max Stone to obtain the starting inventory; the reference checkout supplies opcode registration names. See the root README for that checkout's setup and license.
 
+## Opening briefing and shared rules
+
+T opens the Overseer briefing with the original local portrait and message text. Enter or the visible Continue button advances; the final Enter the cave choice starts the prototype water-chip-search flag. Esc closes the panel. This is an authored presentation of original opening content, not execution of OVER.INT or an NPC placed inside the cave. The cave has no conversational NPC, so none is invented.
+
+The content manifest in `game/content/overseer-briefing.json` contains message IDs and rule effects only. Original text and images are resolved locally during preparation and remain ignored. `dialogue.rs` has no Bevy dependency: conditions, choices, stale-menu rejection, flag changes, and conversation completion are separate from `dialogue_ui.rs`. Saves preserve an active dialogue node and its story flags; F5/F9 also work while the dialogue panel is open. Movement, inventory controls and combat actions pause under the modal. Its closing click is consumed.
+
 ## Controls
 
 - Left-click ground to walk; WASD pans the camera. Home returns to the starting position before combat has been used.
@@ -34,9 +40,9 @@ Ordinary attacks validate range, health, AP and loaded rounds before changing st
 
 This is deliberately incomplete: original criticals, aimed shots, lighting/cover accuracy, perks, burst fire, secondary attacks, equipment armor, non-healing drugs, flare use, XP and combat scripts are not connected. The local Fallout 1 CE ordinary-damage path parses but does not apply ammunition damage modifiers; the rewrite preserves that behavior instead of substituting Fallout 2 rules. Rat turn decisions, activation and instantaneous movement are provisional, not the original AI. Combat begins when an attack succeeds validation; it does not yet reproduce original automatic enemy detection. Combat ends when the current encounter participants are defeated; untouched rats elsewhere do not keep it active. Directly attacked rats remain participants even beyond the provisional nearby-rat radius. The participant roster is saved. Older active schema-3 checkpoints without a roster retain their legacy all-living-rats encounter until it ends. Player death stops walking and attacks; restart or load a checkpoint to resume.
 
-Navigation uses the original six-neighbor hex adjacency and shortest-path search. Floor coverage, path tie-breaking, animation motion/timing, roof handling, wall occlusion, object sorting and lighting still need comparison against the original. Geometric hex distance and line interpolation are tested but do not claim identical original ray tie-breaking. Map transitions, dialogue, quests, sound, character creation and the remaining campaign are not playable yet.
+Navigation uses the original six-neighbor hex adjacency and shortest-path search. Floor coverage, path tie-breaking, animation motion/timing, roof handling, wall occlusion, object sorting and lighting still need comparison against the original. Geometric hex distance and line interpolation are tested but do not claim identical original ray tie-breaking. Map transitions, original NPC dialogue/script execution, full quests, sound, character creation and the remaining campaign are not playable yet. The briefing/quest flag is the first shared dialogue-system slice.
 
-Checkpoints use the rewrite's schema 3, not original Fallout saves. Older quicksaves are rejected; F5 creates a new checkpoint. They save the current cave inventory and the rewrite RNG state, but do not yet save original scripts, world time, or other maps. Save output is written to a temporary file before replacing the checkpoint. Validation rejects incompatible encounter identities, invalid health/AP/ammo, unknown weapons and inconsistent player position before applying any state.
+Checkpoints use the rewrite's schema 3, not original Fallout saves. Older quicksaves are rejected; F5 creates a new checkpoint. They save the current cave inventory, active dialogue, story flags, completed conversations and the rewrite RNG state, but do not yet save original scripts, world time, or other maps. Save output is written to a temporary file before replacing the checkpoint. Validation rejects incompatible encounter identities, invalid health/AP/ammo, unknown weapons and inconsistent player position before applying any state.
 
 ## Verification
 
@@ -44,6 +50,7 @@ Checkpoints use the rewrite's schema 3, not original Fallout saves. Older quicks
 
 - `--smoke`: walks a reachable route and captures a screenshot.
 - `--inventory-smoke`: opens inventory, equips the pistol, captures both views and checks the position-record codec.
+- `--journey-smoke`: advances the briefing through actual Bevy button interactions, checks that dialogue closure consumes its click, equips the pistol, attacks a rat, and verifies save/load across conversation, inventory and combat. Captures both briefing and cave views.
 - `--items-smoke`: reloads from reserves, uses a Stimpak, takes original corpse loot, verifies repeat looting is blocked, then saves and restores quantities, ammunition and health.
 - `--combat-smoke`: fires at a visible rat, verifies AP/ammo spending, runs an enemy turn and checks a complete combat checkpoint round trip.
 

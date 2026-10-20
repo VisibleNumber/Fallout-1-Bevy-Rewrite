@@ -60,6 +60,7 @@ pub struct Fight {
     pub attack_time: f32,
     pub looted: Vec<i32>,
     pub participants: Vec<i32>,
+    pub story: crate::dialogue::Story,
     seed: u64,
 }
 impl Fight {
@@ -84,6 +85,7 @@ impl Fight {
             attack_time: 0.,
             looted: Vec::new(),
             participants: Vec::new(),
+            story: crate::dialogue::Story::default(),
             seed: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -497,6 +499,8 @@ pub fn smoke(
 struct Checkpoint {
     schema: u32,
     #[serde(default)]
+    story: crate::dialogue::Story,
+    #[serde(default)]
     participants: Vec<i32>,
     seed: u64,
     inventory: Vec<ItemState>,
@@ -532,6 +536,7 @@ fn checkpoint(
     };
     let checkpoint = Checkpoint {
         schema: 3,
+        story: fight.story.clone(),
         participants: fight.participants.clone(),
         seed: fight.seed,
         inventory: bag
@@ -554,6 +559,7 @@ fn checkpoint(
     Ok(checkpoint)
 }
 fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<(), String> {
+    c.story.validate(&data.dialogue_definition)?;
     if c.schema != 3 {
         return Err("Unsupported checkpoint version".into());
     }
@@ -686,6 +692,7 @@ pub fn load_checkpoint(
     let c: Checkpoint = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     validate_checkpoint(&c, data, bag)?;
     // Apply only after the complete snapshot passes validation.
+    fight.story = c.story;
     fight.seed = c.seed;
     fight.attack_time = 0.;
     fight.player = c.combat.player;
@@ -982,3 +989,135 @@ struct ItemState {
 #[cfg(test)]
 #[path = "checkpoint_tests.rs"]
 mod checkpoint_tests;
+
+/// Full local player-journey check. Dialogue advances through the same Bevy
+/// button interactions as normal play; state assertions cover system boundaries.
+pub fn journey_smoke(
+    mut commands: Commands,
+    time: Res<Time>,
+    data: Res<SceneData>,
+    mut fight: ResMut<Fight>,
+    mut bag: ResMut<Bag>,
+    mut motion: ResMut<Motion>,
+    mut stage: Local<u8>,
+    mut last_click: Local<f32>,
+    mut choices: Query<(&crate::dialogue_ui::DialogueChoice, &mut Interaction)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !std::env::args().any(|a| a == "--journey-smoke") {
+        return;
+    }
+    let t = time.elapsed_secs();
+    if *stage == 0 && t > 3. {
+        fight.story.begin(&data.dialogue_definition).unwrap();
+        motion.path.clear();
+        *stage = 1;
+    }
+    if *stage == 1 && t > 4. {
+        commands
+            .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+            .observe(bevy::render::view::screenshot::save_to_disk(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/briefing-smoke.png"
+            )));
+        let file = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/briefing-save-smoke.json"
+        );
+        let expected = fight.story.clone();
+        save_checkpoint(file, &data, &fight, &bag, &motion).unwrap();
+        fight.story = crate::dialogue::Story::default();
+        load_checkpoint(file, &data, &mut fight, &mut bag, &mut motion).unwrap();
+        assert_eq!(fight.story, expected);
+        *stage = 2;
+    }
+    if *stage == 2 {
+        if fight.story.active.is_some() {
+            if t - *last_click <= 0.25 {
+                return;
+            }
+            if let Some((choice, mut interaction)) = choices
+                .iter_mut()
+                .find(|(c, _)| Some(&c.node) == fight.story.active.as_ref())
+            {
+                assert!(!choice.choice.is_empty());
+                *interaction = Interaction::Pressed;
+                *last_click = t;
+            }
+        } else {
+            assert_eq!(fight.story.flags.get("water_chip_search"), Some(&1));
+            assert!(fight.story.completed.contains(&data.dialogue_definition.id));
+            assert!(bag.block_frame, "Closing dialogue consumes its final click");
+            assert!(motion.path.is_empty());
+            assert_eq!(motion.progress, 0.);
+            *stage = 3;
+        }
+    }
+    if *stage == 3 {
+        let gun = bag
+            .inventory
+            .items
+            .iter()
+            .position(|i| i.ammo_capacity > 0)
+            .unwrap();
+        bag.open = true;
+        bag.inventory.select(gun);
+        bag.inventory.equip_selected().unwrap();
+        bag.dirty = true;
+        bag.open = false;
+        let target = fight
+            .rats
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.hp > 0 && distance(motion.tile, r.tile) <= 25)
+            .filter(|(_, r)| {
+                crate::distance::hex_line(motion.tile, r.tile)
+                    .iter()
+                    .skip(1)
+                    .take_while(|t| **t != r.tile)
+                    .all(|t| !data.shot_blocked[*t as usize])
+            })
+            .min_by_key(|(_, r)| distance(motion.tile, r.tile))
+            .unwrap()
+            .0;
+        let rounds = bag.inventory.items[gun].ammo_quantity;
+        shoot(target, &data, &mut fight, &mut bag, &mut motion);
+        assert_eq!(bag.inventory.items[gun].ammo_quantity, rounds - 1);
+        rats_turn(&data, &mut fight, &mut motion);
+        let file = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/journey-save-smoke.json"
+        );
+        let story = fight.story.clone();
+        let rats = fight.rats.clone();
+        let hp = fight.player.hp;
+        save_checkpoint(file, &data, &fight, &bag, &motion).unwrap();
+        fight.story = crate::dialogue::Story::default();
+        fight.player.hp = 1;
+        bag.inventory.items[gun].ammo_quantity = 0;
+        load_checkpoint(file, &data, &mut fight, &mut bag, &mut motion).unwrap();
+        assert_eq!(fight.story, story);
+        assert_eq!(fight.rats, rats);
+        assert_eq!(fight.player.hp, hp);
+        assert_eq!(bag.inventory.items[gun].ammo_quantity, rounds - 1);
+        *stage = 4;
+    }
+    if *stage == 4 && t > 9. {
+        commands
+            .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+            .observe(bevy::render::view::screenshot::save_to_disk(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/journey-smoke.png"
+            )));
+        *stage = 5;
+    }
+    if *stage == 5 && t > 12. {
+        exit.write(AppExit::Success);
+    }
+    if t > 20. {
+        panic!(
+            "Journey stalled at stage {} node {:?}",
+            *stage, fight.story.active
+        );
+    }
+}

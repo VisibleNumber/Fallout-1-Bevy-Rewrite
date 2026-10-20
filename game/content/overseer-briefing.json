@@ -1,0 +1,8 @@
+{
+  "id": "overseer_briefing",
+  "speaker": "Overseer",
+  "flags": ["water_chip_search"],
+  "messages": [101, 102, 106, 107, 108, 109, 110],
+  "finish_effects": [{"flag": "water_chip_search", "value": 1}],
+  "note": "Prototype presentation of locally installed opening briefing text, not execution of OVER.INT. No NPC is added to the cave."
+}
