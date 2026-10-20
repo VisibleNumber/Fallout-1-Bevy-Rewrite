@@ -161,12 +161,39 @@ fn tile_at(p: Vec2) -> Option<i32> {
     }
     Some(r * 200 + 199 - c)
 }
+fn region_names() -> Vec<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/region-catalog.json");
+    let names = std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| {
+            v["maps"].as_array().map(|a| {
+                a.iter()
+                    .filter_map(|m| m["name"].as_str().map(str::to_string))
+                    .filter(|n| {
+                        n.len() <= 12
+                            && n.chars()
+                                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+                    })
+                    .collect::<Vec<_>>()
+            })
+        });
+    names
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| vec!["shadyw".into(), "shadye".into()])
+}
 pub fn run() {
-    let map = if std::env::args().any(|a| a == "--town-east") {
+    let requested = std::env::args().find_map(|a| a.strip_prefix("--map=").map(str::to_string));
+    let default_map = if std::env::args().any(|a| a == "--town-east") {
         "shadye"
     } else {
         "shadyw"
     };
+    let map = requested.as_deref().unwrap_or(default_map);
+    assert!(
+        region_names().iter().any(|n| n == map),
+        "Map is not in the prepared region catalog"
+    );
     let raw = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets")
@@ -722,7 +749,7 @@ fn draw(
         }
     }
     **status = Text::new(format!(
-        "FALLOUT | Original-art 3D Shady Sands | {} person\nWASD move | Hold right mouse: look | Tab: camera | H: roofs | V: overview | F2: west/east | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
+        "FALLOUT | 3D region blockout | {} person\nWASD move | Hold right mouse: look | Tab: camera | H: roofs | V: overview | F2/F3: next/previous map | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
         if control.first { "First" } else { "Third" },
         fight.player.hp,
         fight.player.max_hp,
@@ -734,11 +761,48 @@ fn smoke(
     time: Res<Time>,
     mut control: ResMut<Controller>,
     mut stage: Local<u8>,
+    mut due: Local<f32>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     data: Res<SceneData>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if std::env::args().any(|a| a == "--region-smoke") {
+        control.overview = true;
+        let names = region_names();
+        let now = time.elapsed_secs();
+        if *stage == 0 {
+            *due = now + 4.;
+            *stage = 1;
+        }
+        if now > *due {
+            let index = ((*stage - 1) / 2) as usize;
+            assert_eq!(data.map_name, names[index]);
+            if *stage % 2 == 1 {
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets")
+                    .join(format!("region-{}.png", data.map_name));
+                commands
+                    .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+                    .observe(bevy::render::view::screenshot::save_to_disk(path));
+                *stage += 1;
+                *due = now + 0.7;
+            } else if index + 1 < names.len() {
+                keys.release(KeyCode::F2);
+                keys.press(KeyCode::F2);
+                *stage += 1;
+                *due = now + 2.;
+            } else {
+                println!(
+                    "All {} region maps rendered and switched successfully",
+                    names.len()
+                );
+                exit.write(AppExit::Success);
+            }
+        }
+        assert!(now < 110., "Region preview timed out");
+        return;
+    }
     if std::env::args().any(|a| a == "--town-switch-smoke") {
         if *stage == 0 && time.elapsed_secs() > 4. {
             assert_eq!(data.map_name, "shadyw");
@@ -852,14 +916,17 @@ fn switch_map(
         )>,
     >,
 ) {
-    if !keys.just_pressed(KeyCode::F2) || bag.open {
+    if !(keys.just_pressed(KeyCode::F2) || keys.just_pressed(KeyCode::F3)) || bag.open {
         return;
     }
-    let name = if data.map_name == "shadyw" {
-        "shadye"
+    let names = region_names();
+    let index = names.iter().position(|n| n == &data.map_name).unwrap_or(0);
+    let next_index = if keys.just_pressed(KeyCode::F3) {
+        (index + names.len() - 1) % names.len()
     } else {
-        "shadyw"
+        (index + 1) % names.len()
     };
+    let name = names[next_index].as_str();
     let result = (|| -> Result<(SceneData, Art), String> {
         let bytes = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -8,7 +8,7 @@ import {indexDat,decodeDat,parseMap,parsePro} from '../tools/fallout-research/re
 const root=import.meta.dirname,out=path.join(root,'assets'),game=process.env.FALLOUT_GAME_PATH;if(!game)throw Error('Set FALLOUT_GAME_PATH to your Fallout installation');
 const supportedMaps={v13ent:35,vault13:6,shadyw:26,shadye:25};
 const mapName=(process.env.FALLOUT_MAP||'v13ent').toLowerCase();
-if(!Object.hasOwn(supportedMaps,mapName))throw Error(`Unsupported FALLOUT_MAP ${mapName}; choose ${Object.keys(supportedMaps).join(', ')}`);
+if(!/^[a-z0-9]{1,12}$/.test(mapName))throw Error('Invalid map name');
 const all=new Map(),buffers=new Map();for(const source of ['MASTER.DAT','CRITTER.DAT']){const b=fs.readFileSync(path.join(game,source));buffers.set(source,b);for(const e of indexDat(b,source))all.set(e.path,e);}
 const read=name=>{name=name.toLowerCase();const loose=path.join(game,'DATA',name);if(fs.existsSync(loose))return fs.readFileSync(loose);const e=all.get(name);if(!e)throw Error('Missing '+name);return decodeDat(buffers.get(e.source),e);};
 const palette=read('color.pal'),types=['items','critters','scenery','walls','tiles','misc'],lists=Object.fromEntries(types.map(t=>[t,read(`art/${t}/${t}.lst`).toString('latin1').split(/\r?\n/).map(s=>s.split(/[,; ]/)[0].toLowerCase())]));
@@ -96,7 +96,7 @@ for(const o of map.objects.filter(o=>o.tile>=0&&o.elevation===0&&!(o.flags&1))){
  const name=lists[types[kind]][o.fid&4095];
  if(!name||['block.frm','scrblk.frm','trnblk.frm','reserved.frm'].includes(name))continue;
  const f=frame('art/'+types[kind]+'/'+name,o.rotation),[sx,sy]=screen(o.tile),[x,z]=groundPoint(sx+16,sy+8);
- view3d.props.push({file:f.file,w:f.w,h:f.h,x,z,kind,tile:o.tile,door:kind===2&&protos.get(o.pid)?.sceneryType===0,solid:kind===3&&!(o.flags&8)&&f.h>25,uv:process.env.FALLOUT_TEXTURE_WALLS==='1'&&kind===3&&!(o.flags&8)&&f.h>25?wallPatch('art/'+types[kind]+'/'+name,o.rotation):[0,0,1,1]});
+ view3d.props.push({source_pid:o.pid,source_id:o.id,material_slot:kind===3?'wall':protos.get(o.pid)?.sceneryType===0?'door':'prop',file:f.file,w:f.w,h:f.h,x,z,kind,tile:o.tile,door:kind===2&&protos.get(o.pid)?.sceneryType===0,solid:kind===3&&!(o.flags&8)&&f.h>25,uv:process.env.FALLOUT_TEXTURE_WALLS==='1'&&kind===3&&!(o.flags&8)&&f.h>25?wallPatch('art/'+types[kind]+'/'+name,o.rotation):[0,0,1,1]});
 }
 const scene={view3d,map_name:mapName,map_number:map.mapNumber,exit_grids,world_map,dialogue_definition,dialogue_portrait,examinables,ap_light,carry_weight:characterStat(pc.character,12),loot_catalog:loot_containers,loot_containers:mapName==='v13ent'?loot_containers:[],unarmed_attacking,shot_blocked,actors,weapons,unarmed,player_combat,sprites,ui,inventory,inventory_background,weapon_art,player_name:pc.character.name,hit_points:characterStat(pc.character,7,{gameTime:264600}),armor_class:characterStat(pc.character,9,{gameTime:264600}),player,walking,walkable,spawn_tile:spawnTile,spawn:[x+16,y+8],errors,limitations:['Original sorting/light/roof behavior not yet reproduced.','Player movement and cave combat are prototypes; full original behavior is incomplete.']};
 fs.writeFileSync(path.join(out,`scene-${mapName}.json`),JSON.stringify(scene));if(mapName==='v13ent')fs.writeFileSync(path.join(out,'scene.json'),JSON.stringify(scene));console.log(JSON.stringify({map:mapName,spawnTile,exits:exit_grids.length,sprites:sprites.length,images:cache.size,errors:errors.length,examples:errors.slice(0,6)}));
