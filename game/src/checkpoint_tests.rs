@@ -146,15 +146,15 @@ fn clone_item(item: &crate::inventory::Item) -> crate::inventory::Item {
 fn temp_file() -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
-    let root=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-checkpoints");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/test-checkpoints");
     std::fs::create_dir_all(&root).unwrap();
     root.join(format!(
-            "fallout-checkpoint-test-{}-{}.json",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ))
-        .to_string_lossy()
-        .into_owned()
+        "fallout-checkpoint-test-{}-{}.json",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+    .to_string_lossy()
+    .into_owned()
 }
 
 #[test]
@@ -281,4 +281,57 @@ fn invalid_file_load_leaves_all_runtime_state_unchanged() {
         (motion.tile, motion.from, motion.facing, motion.progress),
         motion_before
     );
+}
+
+#[test]
+fn encounter_ends_after_participants_die_with_untouched_rats_still_alive() {
+    let data = scene();
+    let mut fight = Fight::new(&data);
+    let mut untouched = fight.rats[0].clone();
+    untouched.id = 21;
+    fight.rats.push(untouched);
+    fight.active = true;
+    fight.participants = vec![20];
+    fight.player.ap = 0;
+    finish_encounter(&mut fight);
+    assert!(fight.active);
+    fight.rats[0].hp = 0;
+    finish_encounter(&mut fight);
+    assert!(!fight.active);
+    assert!(fight.participants.is_empty());
+    assert_eq!(fight.player.ap, fight.player.max_ap);
+    assert!(fight.rats[1].hp > 0);
+}
+#[test]
+fn checkpoint_preserves_and_validates_encounter_participants() {
+    let data = scene();
+    let (mut fight, mut bag, mut motion) = setup(&data);
+    fight.active = true;
+    fight.participants = vec![20];
+    let file = temp_file();
+    save_checkpoint(&file, &data, &fight, &bag, &motion).unwrap();
+    fight.participants.clear();
+    fight.active = false;
+    load_checkpoint(&file, &data, &mut fight, &mut bag, &mut motion).unwrap();
+    assert_eq!(fight.participants, vec![20]);
+    assert!(fight.active);
+    let mut c = checkpoint(&data, &fight, &bag, &motion).unwrap();
+    c.participants.push(20);
+    assert!(validate_checkpoint(&c, &data, &bag).is_err());
+    c.participants = vec![999];
+    assert!(validate_checkpoint(&c, &data, &bag).is_err());
+    std::fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn attacked_distant_rat_still_takes_its_turn() {
+    let data = scene();
+    let (mut fight, _bag, mut motion) = setup(&data);
+    fight.active = true;
+    fight.participants = vec![20];
+    fight.rats[0].tile = 115;
+    assert!(distance(fight.rats[0].tile, motion.tile) > 12);
+    rats_turn(&data, &mut fight, &mut motion);
+    assert_ne!(fight.rats[0].tile, 115);
+    assert!(fight.active);
 }

@@ -59,6 +59,7 @@ pub struct Fight {
     pub touched: bool,
     pub attack_time: f32,
     pub looted: Vec<i32>,
+    pub participants: Vec<i32>,
     seed: u64,
 }
 impl Fight {
@@ -82,6 +83,7 @@ impl Fight {
             touched: false,
             attack_time: 0.,
             looted: Vec::new(),
+            participants: Vec::new(),
             seed: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -211,6 +213,10 @@ fn shoot(index: usize, data: &SceneData, fight: &mut Fight, bag: &mut Bag, motio
                 .map(|(_, r)| r)
                 .unwrap_or(motion.facing);
             fight.active = true;
+            let id = fight.rats[index].id;
+            if !fight.participants.contains(&id) {
+                fight.participants.push(id);
+            }
             fight.touched = true;
             motion.path.clear();
             if let Some(i) = item_index {
@@ -227,22 +233,42 @@ fn shoot(index: usize, data: &SceneData, fight: &mut Fight, bag: &mut Bag, motio
             } else {
                 "You missed the rat".into()
             };
-            if fight.rats.iter().all(|r| r.hp == 0) {
-                fight.active = false;
-            }
+            finish_encounter(fight);
         }
         Err(e) => motion.message = e,
     }
 }
+fn finish_encounter(fight: &mut Fight) {
+    let opponent_alive = fight
+        .rats
+        .iter()
+        .any(|r| r.hp > 0 && fight.participants.contains(&r.id));
+    if !opponent_alive || fight.player.hp == 0 {
+        fight.active = false;
+        fight.participants.clear();
+        if fight.player.hp > 0 {
+            combat::end_turn(&mut fight.player);
+        }
+    }
+}
 fn rats_turn(data: &SceneData, fight: &mut Fight, motion: &mut Motion) {
+    if !fight.active {
+        return;
+    }
     let mut messages = Vec::new();
     for i in 0..fight.rats.len() {
         if fight.rats[i].hp == 0 || fight.player.hp == 0 {
             continue;
         }
         // Provisional activation radius; original perception/script/AI scheduling is pending.
-        if distance(fight.rats[i].tile, motion.tile) > 12 {
+        if distance(fight.rats[i].tile, motion.tile) > 12
+            && !fight.participants.contains(&fight.rats[i].id)
+        {
             continue;
+        }
+        let id = fight.rats[i].id;
+        if !fight.participants.contains(&id) {
+            fight.participants.push(id);
         }
         fight.rats[i].ap = fight.rats[i].max_ap;
         let mut grid = data.walkable.clone();
@@ -303,6 +329,7 @@ fn rats_turn(data: &SceneData, fight: &mut Fight, motion: &mut Motion) {
             }
         }
     }
+    finish_encounter(fight);
     combat::end_turn(&mut fight.player);
     motion.message = if messages.is_empty() {
         "Your turn".into()
@@ -427,7 +454,14 @@ pub fn smoke(
         let ammo = bag.inventory.items[i].ammo_quantity;
         let ap = fight.player.ap;
         shoot(target, &data, &mut fight, &mut bag, &mut motion);
-        assert_eq!(fight.player.ap, ap - 5);
+        assert_eq!(
+            fight.player.ap,
+            if fight.active {
+                ap - 5
+            } else {
+                fight.player.max_ap
+            }
+        );
         assert_eq!(bag.inventory.items[i].ammo_quantity, ammo - 1);
         rats_turn(&data, &mut fight, &mut motion);
         assert_eq!(fight.player.ap, fight.player.max_ap);
@@ -462,6 +496,8 @@ pub fn smoke(
 #[derive(Deserialize, Serialize)]
 struct Checkpoint {
     schema: u32,
+    #[serde(default)]
+    participants: Vec<i32>,
     seed: u64,
     inventory: Vec<ItemState>,
     looted: Vec<i32>,
@@ -496,6 +532,7 @@ fn checkpoint(
     };
     let checkpoint = Checkpoint {
         schema: 3,
+        participants: fight.participants.clone(),
         seed: fight.seed,
         inventory: bag
             .inventory
@@ -522,6 +559,12 @@ fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<()
     }
     if c.seed == 0 {
         return Err("Invalid random state".into());
+    }
+    let mut participant_ids = std::collections::HashSet::new();
+    for id in &c.participants {
+        if !participant_ids.insert(*id) || !data.actors.iter().any(|a| a.id == *id) {
+            return Err("Invalid encounter participant".into());
+        }
     }
     let initial = Fight::new(data);
     let caps = bag
@@ -648,6 +691,16 @@ pub fn load_checkpoint(
     fight.player = c.combat.player;
     fight.rats = c.combat.rats;
     fight.active = c.combat.active;
+    fight.participants = if fight.active && c.participants.is_empty() {
+        fight
+            .rats
+            .iter()
+            .filter(|r| r.hp > 0)
+            .map(|r| r.id)
+            .collect()
+    } else {
+        c.participants
+    };
     fight.touched = c.touched;
     fight.looted = c.looted;
     for (item, state) in bag.inventory.items.iter_mut().zip(c.inventory) {
