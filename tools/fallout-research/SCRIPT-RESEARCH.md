@@ -25,4 +25,14 @@ There are 24 persisted script records and six unique script dependencies includi
 4. Add map-update/map-exit and spatial/object trigger dispatch, then compare save/load transitions.
 5. Feed the same state layer to Bevy presentation once the original behavior is reproducible.
 
-No full script VM, runtime trace, high-level decompilation or verified Rust rules implementation is claimed by the current tool.
+## Integer execution subset
+
+The tool now includes a bounded integer VM subset with independent synthetic tests for operand ordering, signed division, branches, internal calls, local/program-global stack slots, return-stack transfers, frame operations and execution limits. Strings, floats, pointer values, external calls and the engine scheduler remain unsupported. Arithmetic wrapping represents a deliberate 32-bit model; edge cases still need original executable comparison.
+
+Bootstrap probing with no host context halts 19 scripts and blocks 933 at the first unimplemented dependency in the development installation. These are bootstrap outcomes only, not completed game-script runs. The most common first dependencies are script action and the current script owner object.
+
+The cave's map-enter procedure first queries whether the map is newly entered. With no context, the probe stops at that query. An explicit scalar map-flags context lets it evaluate the condition and reach the request to override the player's map entry location. The tool stops there because placement requires real object/world semantics. It does not pretend to apply a movement command or execute the rest of the opening.
+
+The optional scalar host distinguishes game globals, map globals and per-script locals, requires supplied values, and records variable writes. It implements selected read-only metarule queries. This is useful for controlled probes but is not a model of the complete world.
+
+No full script VM, original-engine runtime trace, high-level decompilation or verified Rust rules implementation is claimed by the current tool.

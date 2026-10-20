@@ -12,3 +12,5 @@ jobs:
           node-version: 22
       - run: node tools/fallout-research/test.mjs
       - run: node tools/fallout-research/bytecode.test.mjs
+      - run: node tools/fallout-research/vm.test.mjs
+      - run: node tools/fallout-research/scalar-host.test.mjs

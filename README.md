@@ -67,6 +67,23 @@ Map connections resolve the map-header script index separately from script-recor
 
 See [script research findings](tools/fallout-research/SCRIPT-RESEARCH.md). After running scripts-audit and the opening map-links command, run `node tools/fallout-research/bytecode.test.mjs --integration` for development-edition coverage checks.
 
+## Bounded script execution research
+
+```powershell
+node tools/fallout-research/vm.test.mjs
+node tools/fallout-research/scalar-host.test.mjs
+node tools/fallout-research/research.mjs vm-readiness
+node tools/fallout-research/research.mjs vm-probe scripts/v13cave.int map_enter_p_proc
+```
+
+The integer VM subset executes arithmetic, comparisons, branches, stack frames, internal calls and stack-addressed program variables. It bounds execution steps and stack sizes. Unsupported operations stop explicitly. It is not a playable engine or a complete VM; strings, floats, object pointers, external programs and scheduler callbacks remain unsupported.
+
+`vm-probe` writes a local trace under reports/vm. Named procedures use a synthetic zero-argument frame and a return sentinel; they do not load the original program's initialized globals or a real game state. `vm-readiness` starts each script's bootstrap with no world bindings and reports its first blocker. A halted bootstrap is not evidence that the full script or campaign works.
+
+An optional third argument to vm-probe supplies a local JSON scalar context after the procedure name. Supported explicit properties are mapFlags, scriptAction, mapIndex, gameTime, partyCount, isLoadingGame, gameGlobals, mapGlobals and scriptLocals. Variable scopes use indexed JSON objects. Missing values stop rather than defaulting to invented state. Only the first-run/party-count/loadgame metarule queries are supported. Object movement, inventory and other world changes are not stubbed. Changes to supplied variable scopes are recorded in the report and never written back to the input JSON.
+
+The scalar context and VM traces are research fixtures, not save-game imports or verified original behavior. Refer to SCRIPT-RESEARCH.md for remaining execution work.
+
 ## Publishing policy
 
 Commit only tool source, synthetic tests and authored documentation. Keep generated reports, extracted text, textures, maps, scripts, prototypes, archives, audio, cinematics, executables and saves out of Git. `.gitignore` provides additional protection; review staged files before every push.
