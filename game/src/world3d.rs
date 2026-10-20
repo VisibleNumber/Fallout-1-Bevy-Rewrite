@@ -40,84 +40,71 @@ fn full_uv() -> [f32; 4] {
     [0., 0., 1., 1.]
 }
 #[derive(Resource, Default)]
-struct Walls(Vec<Vec2>);
+struct Walls(Vec<Vec2>, Vec<WallRun>);
+#[derive(Clone, Copy, Debug)]
+struct WallRun {
+    min: Vec2,
+    max: Vec2,
+}
+fn wall_runs(points: &[Vec2], doors: &[Vec2], blocked: impl Fn(Vec2) -> bool) -> Vec<WallRun> {
+    let mut points = points.to_vec();
+    points.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.x.total_cmp(&b.x)));
+    points.dedup_by(|a, b| a.distance_squared(*b) < 0.0001);
+    let half = Vec2::splat(WALL_WIDTH / 2.);
+    let mut runs: Vec<WallRun> = Vec::new();
+    let mut previous: Option<Vec2> = None;
+    for p in points {
+        let join = previous.is_some_and(|a| {
+            (a.y - p.y).abs() < 0.001
+                && p.x - a.x <= 2.01
+                && !doors
+                    .iter()
+                    .any(|d| d.x > a.x && d.x < p.x && (d.y - p.y).abs() < WALL_WIDTH)
+                && (1..8).all(|i| blocked(a.lerp(p, i as f32 / 8.)))
+        });
+        if join {
+            runs.last_mut().unwrap().max.x = p.x + half.x;
+        } else {
+            runs.push(WallRun {
+                min: p - half,
+                max: p + half,
+            });
+        }
+        previous = Some(p);
+    }
+    // Merge touching vertical sections without enlarging their occupied footprint.
+    runs.sort_by(|a, b| {
+        a.min
+            .x
+            .total_cmp(&b.min.x)
+            .then(a.max.x.total_cmp(&b.max.x))
+            .then(a.min.y.total_cmp(&b.min.y))
+    });
+    let mut merged: Vec<WallRun> = Vec::new();
+    for run in runs {
+        if let Some(last) = merged.last_mut() {
+            if (last.min.x - run.min.x).abs() < 0.001
+                && (last.max.x - run.max.x).abs() < 0.001
+                && run.min.y <= last.max.y
+            {
+                last.max.y = last.max.y.max(run.max.y);
+                continue;
+            }
+        }
+        merged.push(run);
+    }
+    merged
+}
 const WALL_WIDTH: f32 = 1.15;
 const WALL_HEIGHT: f32 = 2.7;
 fn touches_wall(p: Vec2, radius: f32, walls: &Walls) -> bool {
-    walls.0.iter().any(|c| {
+    walls.1.iter().any(|r| {
+        let d = (p - p.clamp(r.min, r.max)).length_squared();
+        d < radius * radius
+    }) || walls.0.iter().any(|c| {
         let d = (p - *c).abs() - Vec2::splat(WALL_WIDTH / 2.);
         d.max(Vec2::ZERO).length_squared() < radius * radius || (d.x <= 0. && d.y <= 0.)
     })
-}
-fn solid_wall_mesh(uv: [f32; 4]) -> Mesh {
-    // Chamfered adobe footprint: closed volume with softened vertical edges.
-    let half = WALL_WIDTH / 2.;
-    let bevel = 0.08;
-    let outline = [
-        [-half + bevel, -half],
-        [half - bevel, -half],
-        [half, -half + bevel],
-        [half, half - bevel],
-        [half - bevel, half],
-        [-half + bevel, half],
-        [-half, half - bevel],
-        [-half, -half + bevel],
-    ];
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut tex = Vec::new();
-    let mut indices = Vec::new();
-    for i in 0..8 {
-        let a = outline[i];
-        let b = outline[(i + 1) % 8];
-        let start = positions.len() as u32;
-        positions.extend([
-            [a[0], 0., a[1]],
-            [b[0], 0., b[1]],
-            [b[0], WALL_HEIGHT, b[1]],
-            [a[0], WALL_HEIGHT, a[1]],
-        ]);
-        let n = Vec3::new(b[1] - a[1], 0., a[0] - b[0])
-            .normalize()
-            .to_array();
-        normals.extend([n; 4]);
-        tex.extend([
-            [uv[0], uv[3]],
-            [uv[2], uv[3]],
-            [uv[2], uv[1]],
-            [uv[0], uv[1]],
-        ]);
-        indices.extend([start, start + 2, start + 1, start, start + 3, start + 2]);
-    }
-    for (height, normal, top) in [
-        (WALL_HEIGHT, [0., 1., 0.], true),
-        (0., [0., -1., 0.], false),
-    ] {
-        let start = positions.len() as u32;
-        for p in outline {
-            positions.push([p[0], height, p[1]]);
-            normals.push(normal);
-            tex.push([
-                uv[0] + (p[0] / WALL_WIDTH + 0.5) * (uv[2] - uv[0]),
-                uv[1] + (p[1] / WALL_WIDTH + 0.5) * (uv[3] - uv[1]),
-            ]);
-        }
-        for i in 1..7 {
-            if top {
-                indices.extend([start, start + i + 1, start + i]);
-            } else {
-                indices.extend([start, start + i, start + i + 1]);
-            }
-        }
-    }
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, tex)
-    .with_inserted_indices(Indices::U32(indices))
 }
 #[derive(Resource)]
 struct Controller {
@@ -315,7 +302,7 @@ fn setup(
     let ground_mesh = meshes.add(floor_mesh());
     let card = meshes.add(Rectangle::new(1., 1.));
     let mut cache = HashMap::new();
-    let wall_mesh = meshes.add(solid_wall_mesh(full_uv()));
+
     let roof_mesh = meshes.add(Cuboid::new(2., 0.14, 2.));
     let wall_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.66, 0.63, 0.56),
@@ -344,6 +331,30 @@ fn setup(
     let lintel_mesh = meshes.add(Cuboid::new(1.28, 0.18, 0.3));
     let leaf_mesh = meshes.add(Cuboid::new(0.96, 2.1, 0.12));
     let mut walls = Walls::default();
+    let points: Vec<_> = art
+        .props
+        .iter()
+        .filter(|p| p.solid && !p.door)
+        .map(|p| Vec2::new(p.x, p.z))
+        .collect();
+    let door_points: Vec<_> = art
+        .props
+        .iter()
+        .filter(|p| p.door)
+        .map(|p| Vec2::new(p.x, p.z))
+        .collect();
+    walls.1 = wall_runs(&points, &door_points, |p| {
+        tile_at(p).is_some_and(|t| !data.walkable[t as usize])
+    });
+    for run in &walls.1 {
+        let size = run.max - run.min;
+        let center = (run.min + run.max) * 0.5;
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::new(size.x, WALL_HEIGHT, size.y))),
+            MeshMaterial3d(wall_material.clone()),
+            Transform::from_xyz(center.x, WALL_HEIGHT / 2., center.y),
+        ));
+    }
     for f in &art.floors {
         let texture = cache
             .entry(f.file.clone())
@@ -444,12 +455,6 @@ fn setup(
             continue;
         }
         if f.solid {
-            commands.spawn((
-                Mesh3d(wall_mesh.clone()),
-                MeshMaterial3d(wall_material.clone()),
-                Transform::from_xyz(f.x, 0., f.z),
-            ));
-            walls.0.push(Vec2::new(f.x, f.z));
             continue;
         }
         let texture = cache
@@ -908,27 +913,28 @@ fn smoke(
 mod tests {
     use super::*;
     #[test]
+    fn wall_runs_preserve_doors_and_walkable_gaps() {
+        let p = [Vec2::ZERO, Vec2::new(2., 0.), Vec2::new(4., 0.)];
+        assert_eq!(wall_runs(&p, &[], |_| true).len(), 1);
+        assert_eq!(
+            wall_runs(&[Vec2::ZERO, Vec2::Y, Vec2::Y * 2.], &[], |_| true).len(),
+            1
+        );
+        assert_eq!(wall_runs(&p, &[Vec2::new(1., 0.)], |_| true).len(), 2);
+        assert_eq!(wall_runs(&p, &[], |_| false).len(), 3);
+        let runs = wall_runs(&p, &[], |_| true);
+        let walls = Walls(vec![], runs);
+        assert!(touches_wall(Vec2::new(1., 0.), 0.18, &walls));
+        assert!(!touches_wall(Vec2::new(1., 1.), 0.18, &walls));
+    }
+    #[test]
     fn solid_wall_blocks_player_radius_including_corners() {
-        let walls = Walls(vec![Vec2::ZERO]);
+        let walls = Walls(vec![Vec2::ZERO], vec![]);
         assert!(touches_wall(Vec2::ZERO, 0.18, &walls));
         assert!(touches_wall(Vec2::new(0.7, 0.), 0.18, &walls));
         assert!(touches_wall(Vec2::new(0.7, 0.7), 0.18, &walls));
         assert!(!touches_wall(Vec2::new(0.8, 0.), 0.18, &walls));
         assert!(!touches_wall(Vec2::ZERO, 0.18, &Walls::default()));
-    }
-    #[test]
-    fn solid_wall_uses_closed_mesh_and_only_selected_original_texture_region() {
-        let mesh = solid_wall_mesh([0.2, 0.3, 0.7, 0.8]);
-        let Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) =
-            mesh.attribute(Mesh::ATTRIBUTE_UV_0)
-        else {
-            panic!("missing texture coordinates")
-        };
-        assert!(
-            uv.iter()
-                .all(|p| (0.2..=0.7).contains(&p[0]) && (0.3..=0.8).contains(&p[1]))
-        );
-        assert_eq!(mesh.indices().unwrap().len(), 84);
     }
     #[test]
     fn original_hex_centers_round_trip_through_3d_ground() {

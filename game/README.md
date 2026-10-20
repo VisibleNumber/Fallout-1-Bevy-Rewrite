@@ -119,3 +119,9 @@ The adapter keeps each prop's original `source_pid`, `source_id`, `tile`, and a 
 WASD moves; Caps Lock toggles walk/run and holding left Shift inverts that selection. Left Ctrl toggles crouching while grounded; Space jumps while standing. Tab switches first/third person. Hold right mouse to look. Movement uses small collision steps and keeps original map walkability authoritative even while airborne. Jumping does not yet allow traversing raised geometry; crouching currently scales the sprite rather than playing a dedicated animation. Speeds, jump height and gravity are provisional, not verified New Vegas values.
 
 `--3d --movement-smoke` exercises the actual input/controller systems and asserts takeoff, landing, crouch, blocked crouched jump, run toggle and camera toggle. The town round-trip smoke now uses F3 to return from the east section, respecting the expanded region catalog. NPC quest integration, persistent 3D saves and faithful architectural replacement remain pending.
+
+## Wall continuity pass
+
+The 3D viewer now joins collinear wall sections, using the same rectangular bounds for rendering and player/camera collision. Horizontal gaps are joined only when sampled original walkability marks the intervening tiles blocked; imported doors prevent those joins. Touching vertical sections merge without expanding their occupied bounds. Tests cover blocked/walkable gaps, door separation, vertical merging and collision inside joined sections. The obsolete bevelled pillar mesh was removed.
+
+This is a conservative blockout improvement. Staggered source positions still produce stepped silhouettes, visible in the private first-person capture; accurate wall orientation and architectural reconstruction remain pending. No 1:1 visual fidelity is claimed.
