@@ -32,3 +32,7 @@ Local save fixtures are `briefing-save-smoke.json` and `journey-save-smoke.json`
 Outside combat, press Y to access the actual Overseer script. This temporary access does not place an NPC in the cave. Select a response; verify that the next reply comes from the original script, then finish the conversation. Open it again and confirm the Overseer now asks a different question. Save mid-conversation with F5, advance, then F9: the original reply, choices and VM variables should restore together. Esc pauses; Y resumes. Saving/loading while a worker request is pending must wait.
 
 `--original-dialogue-smoke` exercises this complete asynchronous UI path with the actual installed `OVER.INT`, including native inventory reconciliation, save/load both mid-conversation and after completion, and a changed original reply on return. Private captures are `original-dialogue-smoke.png` and `original-dialogue-return-smoke.png`; its checkpoint is `original-dialogue-smoke-save.json` under `game/assets/`.
+
+## Connected maps
+
+After `node game/prepare-world.mjs`, run `--travel-smoke` to verify the four-map route and destination-menu interaction. Manually, open M outside combat, select Shady Sands west, inspect NPC positions, visit the east section, then return to the cave. Health, ammunition, inventory, story state and the cave encounter should persist during this run. F5/F9 save only the current map; loading that checkpoint while on another map must report a map mismatch without changing state.

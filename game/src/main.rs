@@ -15,6 +15,7 @@ mod navigation;
 mod original_dialogue;
 mod original_dialogue_ui;
 mod save;
+mod travel;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 #[derive(Clone, Deserialize)]
 struct Frame {
@@ -47,6 +48,11 @@ struct Placed {
 }
 #[derive(Deserialize, Resource)]
 struct SceneData {
+    map_name: String,
+    map_number: i32,
+    exit_grids: Vec<travel::ExitGrid>,
+    world_map: Frame,
+    loot_catalog: Vec<combat_ui::LootContainer>,
     dialogue_definition: dialogue::Definition,
     dialogue_portrait: Frame,
     examinables: Vec<interaction::Examinable>,
@@ -78,7 +84,7 @@ struct Player;
 struct Hud;
 #[derive(Component)]
 struct HitPoints;
-#[derive(Resource)]
+#[derive(Clone, Resource)]
 struct Motion {
     tile: i32,
     from: i32,
@@ -113,6 +119,7 @@ fn main() {
     App::new()
         .init_resource::<original_dialogue_ui::Job>()
         .insert_resource(fight)
+        .init_resource::<travel::Travel>()
         .insert_resource(bag)
         .insert_resource(data)
         .insert_resource(motion)
@@ -138,7 +145,8 @@ fn main() {
             Update,
             (
                 inventory_ui::actions.run_if(dialogue_ui::in_game),
-                dialogue_ui::controls,
+                combat_ui::journey_smoke,
+                (dialogue_ui::controls, dialogue_ui::journey_guard).chain(),
                 original_dialogue_ui::smoke,
                 original_dialogue_ui::controls,
                 combat_ui::item_actions.run_if(dialogue_ui::in_game),
@@ -152,13 +160,19 @@ fn main() {
                 interface::update,
                 dialogue_ui::refresh,
                 original_dialogue_ui::refresh,
-                combat_ui::journey_smoke,
                 combat_ui::smoke,
                 combat_ui::items_smoke,
                 inventory_smoke,
                 smoke,
             )
-                .chain(),
+                .chain()
+                .run_if(travel::in_map),
+        )
+        .add_systems(
+            Update,
+            (travel::smoke, travel::buttons, travel::update)
+                .chain()
+                .after(smoke),
         )
         .run();
 }
@@ -168,6 +182,7 @@ fn setup(mut commands: Commands, data: Res<SceneData>, assets: Res<AssetServer>)
     combat_ui::spawn(&mut commands, &data, &assets);
     for s in &data.sprites {
         commands.spawn((
+            travel::MapEntity,
             Sprite::from_image(assets.load(s.file.clone())),
             Transform::from_xyz(s.x, -s.y, s.z),
         ));
@@ -419,7 +434,8 @@ fn walk(
         m.progress = 0.;
     }
     **hud = Text::new(format!(
-        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | T briefing | Y Overseer | R reload | G search | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
+        "FALLOUT REWRITE | {}\nClick ground | WASD pan | I inventory | T briefing | Y Overseer | M travel | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
+        data.map_name,
         m.tile,
         m.path.len(),
         m.message,

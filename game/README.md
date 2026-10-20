@@ -69,3 +69,15 @@ Verification:
 - `node game/script-dialogue-host.test.mjs`: synthetic dialogue opcode contracts.
 - `node game/script-runtime.test.mjs`: requires local game/reference; exercises real original replies, Intelligence filtering, callbacks, JSON persistence, repeat visits and stale-choice rejection.
 - `--original-dialogue-smoke`: runs the real script asynchronously through Bevy response buttons; tests inventory bridging, checkpoints mid-conversation and after closing, click consumption, and a changed reply on a return visit. Captures private screenshots under `game/assets`.
+
+## Connected location prototype
+
+Prepare all four supported maps with `node game/prepare-world.mjs` (the same local game/reference environment variables apply). Individual preparation accepts `FALLOUT_MAP=v13ent`, `vault13`, `shadyw`, or `shadye`. Each writes a separate local scene and uniquely named artwork; preparing another location does not replace the default cave scene.
+
+Press **M** outside combat to open the travel menu and select the Vault 13 cave, Vault 13 entrance level, or either Shady Sands section. Imported exit grids also connect supported destinations; world-map exit grids open the same menu. Unsupported maps and upper elevations report that they are not connected. The menu is a traversal prototype: encounters, discovery, elapsed time, original travel scheduling and the original world-map controls are still missing.
+
+Health, inventory, equipped items, briefing/story flags, original Overseer session and looted cave contents follow the character between locations. Returning during the same run restores the location's encounter state. Settlement NPCs render in their imported positions and are neutral; their dialogue, schedules and quests are not yet connected. When the installation lacks an NPC's standing art, that record stays in the world but is not drawn using unrelated called-shot art.
+
+F5/F9 currently checkpoint the **current location only**. The checkpoint records its map identity and refuses to load into a different map. The complete visited-location collection is held in memory and is not yet saved across restarts; a campaign save is the next persistence step. Travel is blocked during dialogue, pending script work and combat.
+
+`--travel-smoke` visits all four maps, checks health/inventory/story and cave encounter state on return, saves and restores at Shady Sands, then selects a destination through the actual world-menu button handler. Private screenshots are `shady-sands-smoke.png` and `world-travel-smoke.png` under `game/assets/`.

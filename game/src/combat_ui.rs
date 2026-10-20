@@ -8,8 +8,11 @@ use crate::{
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct ActorData {
+    pub visible: bool,
+    pub hostile: bool,
+    pub name: String,
     pub id: i32,
     pub tile: i32,
     pub hp: i32,
@@ -24,7 +27,7 @@ pub struct ActorData {
     pub standing: Vec<Frame>,
     pub dead: Vec<Frame>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct WeaponData {
     pub pid: i32,
     pub damage_type: usize,
@@ -51,7 +54,7 @@ impl WeaponData {
         }
     }
 }
-#[derive(Resource)]
+#[derive(Clone, Resource)]
 pub struct Fight {
     pub player: Combatant,
     pub rats: Vec<Combatant>,
@@ -131,10 +134,14 @@ impl Fight {
 pub struct Rat(usize);
 pub fn spawn(commands: &mut Commands, data: &SceneData, assets: &AssetServer) {
     for (i, a) in data.actors.iter().enumerate() {
+        if !a.visible {
+            continue;
+        }
         let f = &a.standing[a.rotation];
         let p = point(a.tile);
         commands.spawn((
             Rat(i),
+            crate::travel::MapEntity,
             Sprite::from_image(assets.load(f.file.clone())),
             Transform::from_xyz(p.x + f.dx, p.y + f.h / 2. - f.dy, 10. - (p.y + 8.) / 10000.),
         ));
@@ -263,7 +270,7 @@ fn rats_turn(data: &SceneData, fight: &mut Fight, motion: &mut Motion) {
     }
     let mut messages = Vec::new();
     for i in 0..fight.rats.len() {
-        if fight.rats[i].hp == 0 || fight.player.hp == 0 {
+        if !data.actors[i].hostile || fight.rats[i].hp == 0 || fight.player.hp == 0 {
             continue;
         }
         // Provisional activation radius; original perception/script/AI scheduling is pending.
@@ -371,7 +378,7 @@ pub fn actions(
                     .rats
                     .iter()
                     .enumerate()
-                    .filter(|(_, r)| r.hp > 0)
+                    .filter(|(i, r)| r.hp > 0 && data.actors[*i].hostile && data.actors[*i].visible)
                     .filter_map(|(i, r)| {
                         let f = &data.actors[i].standing[data.actors[i].rotation];
                         let center = point(r.tile) + Vec2::new(f.dx, f.h / 2. - f.dy);
@@ -502,6 +509,8 @@ pub fn smoke(
 #[derive(Deserialize, Serialize)]
 struct Checkpoint {
     schema: u32,
+    #[serde(default = "default_map")]
+    map_name: String,
     #[serde(default)]
     story: crate::dialogue::Story,
     #[serde(default)]
@@ -544,6 +553,7 @@ fn checkpoint(
     };
     let checkpoint = Checkpoint {
         schema: 3,
+        map_name: data.map_name.clone(),
         story: fight.story.clone(),
         original: fight.original.clone(),
         script_awards: fight.script_awards.clone(),
@@ -569,6 +579,9 @@ fn checkpoint(
     Ok(checkpoint)
 }
 fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<(), String> {
+    if c.map_name != data.map_name {
+        return Err("Checkpoint belongs to a different map".into());
+    }
     c.story.validate(&data.dialogue_definition)?;
     c.original.validate()?;
     if c.original.loading {
@@ -608,13 +621,12 @@ fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<()
     }
     let mut seen = std::collections::HashSet::new();
     for id in &c.looted {
-        if !seen.insert(*id) || !data.loot_containers.iter().any(|x| x.id == *id) {
+        if !seen.insert(*id) || !loot_catalog(data).iter().any(|x| x.id == *id) {
             return Err("Invalid looted container".into());
         }
     }
     for (state, item) in c.inventory.iter().zip(&data.inventory) {
-        let gained = data
-            .loot_containers
+        let gained = loot_catalog(data)
             .iter()
             .filter(|x| c.looted.contains(&x.id))
             .flat_map(|x| &x.contents)
@@ -761,14 +773,14 @@ pub fn load_checkpoint(
     Ok(())
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct LootContainer {
     pub id: i32,
     pub tile: i32,
     pub name: String,
     pub contents: Vec<LootSlot>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct LootSlot {
     pub item_id: i32,
     pub quantity: i32,
@@ -1075,7 +1087,7 @@ pub fn journey_smoke(
         } else {
             assert_eq!(fight.story.flags.get("water_chip_search"), Some(&1));
             assert!(fight.story.completed.contains(&data.dialogue_definition.id));
-            assert!(bag.block_frame, "Closing dialogue consumes its final click");
+            // The after-controls journey_guard checks the actual closing frame.
             assert!(motion.path.is_empty());
             assert_eq!(motion.progress, 0.);
             *stage = 3;
@@ -1147,5 +1159,17 @@ pub fn journey_smoke(
             "Journey stalled at stage {} node {:?}",
             *stage, fight.story.active
         );
+    }
+}
+
+fn default_map() -> String {
+    "v13ent".into()
+}
+
+fn loot_catalog(data: &SceneData) -> &[LootContainer] {
+    if data.loot_catalog.is_empty() {
+        &data.loot_containers
+    } else {
+        &data.loot_catalog
     }
 }

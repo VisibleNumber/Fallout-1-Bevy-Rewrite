@@ -46,6 +46,11 @@ fn scene() -> SceneData {
     healing.heal_max = 8;
 
     SceneData {
+        map_name: "v13ent".into(),
+        map_number: 35,
+        exit_grids: Vec::new(),
+        world_map: frame(),
+        loot_catalog: Vec::new(),
         dialogue_definition:serde_json::from_str(r#"{"id":"briefing","speaker":"NPC","start":"hello","flags":["water_chip_search"],"nodes":{"hello":{"text":"Synthetic dialogue","choices":[{"id":"end","label":"Done","next":null,"effects":[{"flag":"water_chip_search","value":1}]}]}}}"#).unwrap(),
         dialogue_portrait:frame(),
         examinables: Vec::new(),
@@ -63,6 +68,9 @@ fn scene() -> SceneData {
         unarmed_attacking: vec![vec![frame()]; 6],
         shot_blocked: vec![false; 40_000],
         actors: vec![ActorData {
+            visible: true,
+            hostile: true,
+            name: "Synthetic rat".into(),
             id: 20,
             tile: 101,
             hp: 10,
@@ -440,4 +448,17 @@ fn checkpoints_restore_mid_conversation_and_completed_quest_without_rendering() 
     assert!(validate_checkpoint(&invalid, &data, &bag).is_err());
     assert_eq!(fight.story, completed);
     std::fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn checkpoint_rejects_a_different_map_before_applying_state() {
+    let data = scene();
+    let (fight, bag, motion) = setup(&data);
+    let mut saved = checkpoint(&data, &fight, &bag, &motion).unwrap();
+    saved.map_name = "shadyw".into();
+    assert!(
+        validate_checkpoint(&saved, &data, &bag)
+            .unwrap_err()
+            .contains("different map")
+    );
 }

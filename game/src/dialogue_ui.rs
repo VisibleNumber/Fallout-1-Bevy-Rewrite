@@ -211,3 +211,21 @@ pub fn refresh(
                 });
         });
 }
+
+/// Observe the closing frame before gameplay handlers can consume its click.
+pub fn journey_guard(
+    fight: Res<Fight>,
+    bag: Res<Bag>,
+    motion: Res<Motion>,
+    mut was_open: Local<bool>,
+) {
+    if !std::env::args().any(|a| a == "--journey-smoke") {
+        return;
+    }
+    let open = fight.story.active.is_some();
+    if *was_open && !open {
+        assert!(bag.block_frame, "Closing dialogue consumes its final click");
+        assert!(motion.path.is_empty());
+    }
+    *was_open = open;
+}
