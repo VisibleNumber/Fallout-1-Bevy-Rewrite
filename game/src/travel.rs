@@ -35,6 +35,14 @@ pub struct Travel {
     request: Option<(String, Option<(i32, usize)>)>,
     visited: HashMap<String, Visit>,
     suppressed: Option<(String, i32)>,
+    pending: Option<Prepared>,
+}
+struct Prepared {
+    data: SceneData,
+    fight: Fight,
+    bag: Bag,
+    motion: Motion,
+    visited: HashMap<String, Visit>,
 }
 pub fn in_map(travel: Res<Travel>) -> bool {
     !travel.open
@@ -115,6 +123,37 @@ pub fn update(
     panels: Query<Entity, With<WorldPanel>>,
     mut camera: Single<&mut Transform, With<Camera>>,
 ) {
+    if let Some(saved) = travel.pending.take() {
+        for entity in &entities {
+            commands.entity(entity).despawn();
+        }
+        for entity in &panels {
+            commands.entity(entity).despawn();
+        }
+        for sprite in &saved.data.sprites {
+            commands.spawn((
+                MapEntity,
+                Sprite::from_image(assets.load(sprite.file.clone())),
+                Transform::from_xyz(sprite.x, -sprite.y, sprite.z),
+            ));
+        }
+        combat_ui::spawn(&mut commands, &saved.data, &assets);
+        *data = saved.data;
+        *fight = saved.fight;
+        *bag = saved.bag;
+        *motion = saved.motion;
+        motion.message = "Campaign loaded".into();
+        bag.block_frame = true;
+        bag.open = false;
+        travel.visited = saved.visited;
+        travel.open = false;
+        travel.request = None;
+        travel.suppressed = Some((data.map_name.clone(), motion.tile));
+        let p = point(motion.tile);
+        camera.translation.x = p.x;
+        camera.translation.y = p.y;
+        return;
+    }
     if fight.original.open || fight.original.loading || fight.story.active.is_some() {
         return;
     }
@@ -251,6 +290,45 @@ pub fn smoke(
     assets: Res<AssetServer>,
     mut choices: Query<(&Destination, &mut Interaction)>,
 ) {
+    if std::env::args().any(|a| a == "--campaign-load-smoke") {
+        let now = time.elapsed_secs();
+        if *stage == 0 && now > 3. {
+            load_campaign(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/campaign-smoke-save.json"
+                ),
+                &mut travel,
+            )
+            .unwrap();
+            *stage = 1;
+        }
+        if *stage == 1 && travel.pending.is_none() {
+            assert_eq!(data.map_name, "vault13");
+            assert_eq!(travel.visited.len(), 3);
+            assert_eq!(fight.player.hp, data.player_combat.hp - 1);
+            travel.request = Some(("v13ent".into(), None));
+            *stage = 2;
+        }
+        if *stage == 2 && data.map_name == "v13ent" {
+            assert_eq!(fight.rats[0].hp, 0);
+            assert_eq!(fight.story.flags.get("water_chip_search"), Some(&1));
+            let stim = bag.inventory.items.iter().find(|i| i.heal_min > 0).unwrap();
+            assert_eq!(
+                stim.quantity,
+                data.inventory
+                    .iter()
+                    .find(|i| i.id == stim.id)
+                    .unwrap()
+                    .quantity
+                    - 1
+            );
+            println!("Separate-process campaign restore and return visit passed");
+            exit.write(AppExit::Success);
+        }
+        assert!(now < 20., "Fresh-process campaign restore timed out");
+        return;
+    }
     if !std::env::args().any(|a| a == "--travel-smoke") {
         return;
     }
@@ -340,10 +418,41 @@ pub fn smoke(
     if *stage == 8 && data.map_name == "vault13" {
         assert!(!travel.open);
         println!("World menu destination button passed");
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/campaign-smoke-save.json"
+        );
+        save_campaign(path, &travel, &data, &fight, &bag, &motion).unwrap();
+        let mut invalid: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        invalid["maps"]["shadyw"]["combat"]["rats"][0]["hp"] = serde_json::json!(-1);
+        let bad = format!("{path}.invalid");
+        std::fs::write(&bad, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let count = travel.visited.len();
+        assert!(load_campaign(&bad, &mut travel).is_err());
+        assert_eq!(travel.visited.len(), count);
+        assert!(travel.pending.is_none());
+        *travel = Travel::default();
+        fight.player.hp = 1;
+        load_campaign(path, &mut travel).unwrap();
+        *stage = 9;
+    }
+    if *stage == 9 && now > 17. && travel.pending.is_none() {
+        assert_eq!(fight.player.hp, data.player_combat.hp - 1);
+        assert_eq!(travel.visited.len(), 3);
+        travel.request = Some(("v13ent".into(), None));
+        *stage = 10;
+    }
+    if *stage == 10 && data.map_name == "v13ent" {
+        assert_eq!(fight.rats[0].hp, 0);
+        assert_eq!(fight.story.flags.get("water_chip_search"), Some(&1));
+        println!(
+            "Campaign restart restore, all visited maps and atomic corrupt-save rejection passed"
+        );
         exit.write(AppExit::Success);
     }
     assert!(
-        now < 25.,
+        now < 35.,
         "Travel smoke timed out: {} stage {}",
         data.map_name,
         *stage
@@ -364,5 +473,182 @@ mod tests {
     #[test]
     fn destination_names_are_restricted_before_file_access() {
         assert!(read_scene("../other").is_err());
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Campaign {
+    schema: u32,
+    current: String,
+    maps: std::collections::BTreeMap<String, serde_json::Value>,
+}
+fn initial_motion(data: &SceneData) -> Motion {
+    Motion {
+        tile: data.spawn_tile,
+        from: data.spawn_tile,
+        path: Default::default(),
+        progress: 0.,
+        facing: 2,
+        clock: 0.,
+        message: String::new(),
+    }
+}
+fn campaign(
+    travel: &Travel,
+    data: &SceneData,
+    fight: &Fight,
+    bag: &Bag,
+    motion: &Motion,
+) -> Result<Campaign, String> {
+    if fight.original.loading || motion.progress > 0. || travel.pending.is_some() {
+        return Err("Finish the pending action before saving".into());
+    }
+    let mut maps = std::collections::BTreeMap::new();
+    for (name, visit) in &travel.visited {
+        if name == &data.map_name {
+            continue;
+        }
+        let scene = read_scene(name)?;
+        let mut local = visit.fight.clone();
+        local.story = fight.story.clone();
+        local.original = fight.original.clone();
+        local.looted = fight.looted.clone();
+        local.script_awards = fight.script_awards.clone();
+        local.player = fight.player.clone();
+        local.player.tile = visit.motion.tile;
+        maps.insert(
+            name.clone(),
+            combat_ui::snapshot(&scene, &local, bag, &visit.motion)?,
+        );
+    }
+    maps.insert(
+        data.map_name.clone(),
+        combat_ui::snapshot(data, fight, bag, motion)?,
+    );
+    Ok(Campaign {
+        schema: 1,
+        current: data.map_name.clone(),
+        maps,
+    })
+}
+pub fn save_campaign(
+    path: &str,
+    travel: &Travel,
+    data: &SceneData,
+    fight: &Fight,
+    bag: &Bag,
+    motion: &Motion,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(&campaign(travel, data, fight, bag, motion)?)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 80 * 1024 * 1024 {
+        return Err("Campaign exceeds save size limit".into());
+    }
+    let temp = format!("{path}.tmp");
+    std::fs::write(&temp, bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, path).map_err(|e| e.to_string())
+}
+fn prepare_campaign(saved: Campaign) -> Result<Prepared, String> {
+    if saved.schema != 1 || saved.maps.is_empty() || saved.maps.len() > 4 {
+        return Err("Unsupported campaign save".into());
+    }
+    let current = saved
+        .maps
+        .get(&saved.current)
+        .ok_or("Campaign current map is missing")?;
+    let shared = ["inventory", "story", "original", "script_awards", "looted"];
+    let mut visited = HashMap::new();
+    let mut selected = None;
+    for (name, snapshot) in &saved.maps {
+        for key in shared {
+            if snapshot.get(key) != current.get(key) {
+                return Err(format!("Campaign shared state differs in {name}: {key}"));
+            }
+        }
+        let scene = read_scene(name)?;
+        let mut fight = Fight::new(&scene);
+        let mut bag = Bag::new(scene.inventory.clone());
+        let mut motion = initial_motion(&scene);
+        combat_ui::restore_snapshot(snapshot.clone(), &scene, &mut fight, &mut bag, &mut motion)?;
+        // Character health, AP and base stats are global; only placement differs per map.
+        let mut player = snapshot["combat"]["player"].clone();
+        let mut canonical = current["combat"]["player"].clone();
+        player
+            .as_object_mut()
+            .ok_or("Invalid player record")?
+            .remove("tile");
+        canonical
+            .as_object_mut()
+            .ok_or("Invalid current player record")?
+            .remove("tile");
+        if player != canonical {
+            return Err("Campaign character state differs between maps".into());
+        }
+        if name == &saved.current {
+            selected = Some((scene, fight, bag, motion));
+        } else {
+            visited.insert(name.clone(), Visit { fight, motion });
+        }
+    }
+    let (data, fight, bag, motion) = selected.ok_or("Missing current location")?;
+    Ok(Prepared {
+        data,
+        fight,
+        bag,
+        motion,
+        visited,
+    })
+}
+pub fn load_campaign(path: &str, travel: &mut Travel) -> Result<(), String> {
+    let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
+    if metadata.len() > 80 * 1024 * 1024 {
+        return Err("Campaign exceeds save size limit".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let saved = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    // Nothing in the live game changes until every location validates.
+    travel.pending = Some(prepare_campaign(saved)?);
+    Ok(())
+}
+
+#[cfg(test)]
+mod campaign_tests {
+    use super::*;
+    #[test]
+    fn campaign_rejects_version_empty_missing_current_and_unknown_paths() {
+        assert!(
+            prepare_campaign(Campaign {
+                schema: 2,
+                current: "v13ent".into(),
+                maps: Default::default()
+            })
+            .is_err()
+        );
+        assert!(
+            prepare_campaign(Campaign {
+                schema: 1,
+                current: "v13ent".into(),
+                maps: Default::default()
+            })
+            .is_err()
+        );
+        let mut maps = std::collections::BTreeMap::new();
+        maps.insert("../invalid".into(), serde_json::Value::Null);
+        assert!(
+            prepare_campaign(Campaign {
+                schema: 1,
+                current: "v13ent".into(),
+                maps: maps.clone()
+            })
+            .is_err()
+        );
+        assert!(
+            prepare_campaign(Campaign {
+                schema: 1,
+                current: "../invalid".into(),
+                maps
+            })
+            .is_err()
+        );
     }
 }

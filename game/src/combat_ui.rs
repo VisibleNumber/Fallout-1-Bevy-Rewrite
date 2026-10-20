@@ -727,7 +727,27 @@ pub fn load_checkpoint(
     motion: &mut Motion,
 ) -> Result<(), String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let c: Checkpoint = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    restore_snapshot(value, data, fight, bag, motion)
+}
+
+pub fn snapshot(
+    data: &SceneData,
+    fight: &Fight,
+    bag: &Bag,
+    motion: &Motion,
+) -> Result<serde_json::Value, String> {
+    serde_json::to_value(checkpoint(data, fight, bag, motion)?).map_err(|e| e.to_string())
+}
+
+pub fn restore_snapshot(
+    value: serde_json::Value,
+    data: &SceneData,
+    fight: &mut Fight,
+    bag: &mut Bag,
+    motion: &mut Motion,
+) -> Result<(), String> {
+    let c: Checkpoint = serde_json::from_value(value).map_err(|e| e.to_string())?;
     validate_checkpoint(&c, data, bag)?;
     // Apply only after the complete snapshot passes validation.
     fight.story = c.story;

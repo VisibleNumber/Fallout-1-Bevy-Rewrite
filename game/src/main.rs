@@ -563,11 +563,11 @@ fn save_input(
     keys: Res<ButtonInput<KeyCode>>,
     data: Res<SceneData>,
     mut motion: ResMut<Motion>,
-    mut bag: ResMut<inventory_ui::Bag>,
-    mut fight: ResMut<combat_ui::Fight>,
-    mut camera: Single<&mut Transform, (With<Camera>, Without<Player>)>,
+    bag: Res<inventory_ui::Bag>,
+    fight: Res<combat_ui::Fight>,
+    mut travel: ResMut<travel::Travel>,
 ) {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/quicksave.json");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/campaign-save.json");
     if fight.original.loading {
         if keys.just_pressed(KeyCode::F5) || keys.just_pressed(KeyCode::F9) {
             motion.message = "Wait for the dialogue script before saving or loading".into();
@@ -575,25 +575,15 @@ fn save_input(
         return;
     }
     if keys.just_pressed(KeyCode::F5) {
-        motion.message = if motion.progress > 0. {
-            "Finish moving before saving".into()
-        } else {
-            match combat_ui::save_checkpoint(path, &data, &fight, &bag, &motion) {
-                Ok(()) => "Game saved (position, health, rats and ammunition)".into(),
-                Err(e) => format!("Save failed: {e}"),
-            }
+        motion.message = match travel::save_campaign(path, &travel, &data, &fight, &bag, &motion) {
+            Ok(()) => "Campaign saved (all visited locations)".into(),
+            Err(e) => format!("Save failed: {e}"),
         };
     }
     if keys.just_pressed(KeyCode::F9) {
-        motion.message =
-            match combat_ui::load_checkpoint(path, &data, &mut fight, &mut bag, &mut motion) {
-                Ok(()) => {
-                    let p = point(motion.tile);
-                    camera.translation.x = p.x;
-                    camera.translation.y = p.y;
-                    "Game loaded".into()
-                }
-                Err(e) => format!("Load failed: {e}"),
-            };
+        motion.message = match travel::load_campaign(path, &mut travel) {
+            Ok(()) => "Restoring campaign".into(),
+            Err(e) => format!("Load failed: {e}"),
+        };
     }
 }
