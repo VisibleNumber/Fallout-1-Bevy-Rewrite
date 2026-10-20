@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use serde::Deserialize;
 use std::collections::VecDeque;
+mod combat;
+mod combat_ui;
+mod distance;
 mod inventory;
 mod inventory_ui;
 mod navigation;
@@ -25,6 +28,7 @@ struct UiArt {
 struct WeaponArt {
     pid: i32,
     standing: Vec<Frame>,
+    attacking: Vec<Vec<Frame>>,
     walking: Vec<Vec<Frame>>,
 }
 #[derive(Deserialize)]
@@ -36,6 +40,12 @@ struct Placed {
 }
 #[derive(Deserialize, Resource)]
 struct SceneData {
+    unarmed_attacking: Vec<Vec<Frame>>,
+    shot_blocked: Vec<bool>,
+    actors: Vec<combat_ui::ActorData>,
+    weapons: Vec<combat_ui::WeaponData>,
+    unarmed: combat_ui::WeaponData,
+    player_combat: combat::Combatant,
     sprites: Vec<Placed>,
     ui: Vec<UiArt>,
     inventory: Vec<inventory::Item>,
@@ -53,6 +63,8 @@ struct SceneData {
 struct Player;
 #[derive(Component)]
 struct Hud;
+#[derive(Component)]
+struct HitPoints;
 #[derive(Resource)]
 struct Motion {
     tile: i32,
@@ -81,7 +93,9 @@ fn main() {
         message: String::new(),
     };
     let bag = inventory_ui::Bag::new(data.inventory.clone());
+    let fight = combat_ui::Fight::new(&data);
     App::new()
+        .insert_resource(fight)
         .insert_resource(bag)
         .insert_resource(data)
         .insert_resource(motion)
@@ -107,10 +121,13 @@ fn main() {
             Update,
             (
                 inventory_ui::actions,
+                combat_ui::actions,
                 save_input,
                 input,
                 walk,
                 inventory_ui::refresh,
+                combat_ui::render,
+                combat_ui::smoke,
                 inventory_smoke,
                 smoke,
             )
@@ -121,6 +138,7 @@ fn main() {
 fn setup(mut commands: Commands, data: Res<SceneData>, assets: Res<AssetServer>) {
     let at = point(data.spawn_tile);
     commands.spawn((Camera2d, Transform::from_xyz(at.x, at.y, 1000.)));
+    combat_ui::spawn(&mut commands, &data, &assets);
     for s in &data.sprites {
         commands.spawn((
             Sprite::from_image(assets.load(s.file.clone())),
@@ -171,7 +189,7 @@ fn setup(mut commands: Commands, data: Res<SceneData>, assets: Res<AssetServer>)
                         BackgroundColor(Color::srgb(0.04, 0.045, 0.035)),
                     ))
                     .with_children(|n| {
-                        n.spawn((
+                        let mut text = n.spawn((
                             Text::new(format!("{:03}", value)),
                             TextFont {
                                 font_size: 15.,
@@ -179,6 +197,9 @@ fn setup(mut commands: Commands, data: Res<SceneData>, assets: Res<AssetServer>)
                             },
                             TextColor(Color::srgb(0.3, 1., 0.3)),
                         ));
+                        if y == 40. {
+                            text.insert(HitPoints);
+                        }
                     });
             }
             parent.spawn((
@@ -230,6 +251,7 @@ fn input(
     data: Res<SceneData>,
     mut motion: ResMut<Motion>,
     bag: Res<inventory_ui::Bag>,
+    fight: Res<combat_ui::Fight>,
     window: Single<&Window>,
     mut camera: Single<(&Camera, &GlobalTransform, &mut Transform), Without<Player>>,
 ) {
@@ -247,7 +269,7 @@ fn input(
         }
     }
     t.translation += d.extend(0.) * dt * 300.;
-    if keys.just_pressed(KeyCode::KeyR) {
+    if keys.just_pressed(KeyCode::Home) && !fight.touched {
         motion.tile = data.spawn_tile;
         motion.from = motion.tile;
         motion.path.clear();
@@ -256,7 +278,7 @@ fn input(
         t.translation.x = p.x;
         t.translation.y = p.y;
     }
-    if bag.open || bag.block_frame {
+    if bag.open || bag.block_frame || fight.player.hp == 0 || fight.attack_time > 0. {
         return;
     }
     if buttons.just_pressed(MouseButton::Left) {
@@ -272,7 +294,14 @@ fn input(
                             .total_cmp(&point(*b).distance_squared(p))
                     })
                     .unwrap();
-                let route = navigation::route(motion.tile, target, &data.walkable);
+                let mut grid = data.walkable.clone();
+                for a in &data.actors {
+                    grid[a.tile as usize] = true;
+                }
+                for r in &fight.rats {
+                    grid[r.tile as usize] = r.hp == 0;
+                }
+                let route = navigation::route(motion.tile, target, &grid);
                 motion.message = if route.is_empty() && target != motion.tile {
                     "No route".into()
                 } else {
@@ -290,6 +319,7 @@ fn walk(
     mut m: ResMut<Motion>,
     mut player: Single<(&mut Transform, &mut Sprite), With<Player>>,
     mut hud: Single<&mut Text, With<Hud>>,
+    mut fight: ResMut<combat_ui::Fight>,
     bag: Res<inventory_ui::Bag>,
 ) {
     let dt = if bag.open {
@@ -298,7 +328,13 @@ fn walk(
         time.delta_secs().min(0.05)
     };
     if m.progress == 0. && !bag.open {
+        if fight.player.hp == 0 || (fight.active && fight.player.ap == 0) {
+            m.path.clear();
+        }
         if let Some(next) = m.path.pop_front() {
+            if fight.active {
+                fight.player.ap -= 1;
+            }
             m.from = m.tile;
             m.facing = navigation::neighbors(m.tile)
                 .iter()
@@ -309,6 +345,7 @@ fn walk(
             m.progress = 0.0001;
         }
     }
+    fight.player.tile = m.tile;
     let moving = m.progress > 0.;
     if moving {
         m.clock += dt;
@@ -319,6 +356,9 @@ fn walk(
     } else {
         point(m.tile)
     };
+    if fight.attack_time > 0. {
+        fight.attack_time = (fight.attack_time - dt).max(0.);
+    }
     let equipped = bag
         .inventory
         .items
@@ -335,6 +375,15 @@ fn walk(
             .map(|a| &a.standing[m.facing])
             .unwrap_or(&data.player[m.facing])
     };
+    let attack_frames = equipped
+        .map(|a| &a.attacking[m.facing])
+        .unwrap_or(&data.unarmed_attacking[m.facing]);
+    let f = if fight.attack_time > 0. && !attack_frames.is_empty() {
+        &attack_frames[((1. - fight.attack_time / 0.8) * attack_frames.len() as f32) as usize
+            % attack_frames.len()]
+    } else {
+        f
+    };
     let (t, s) = &mut *player;
     t.translation = Vec3::new(p.x + f.dx, p.y + f.h / 2. - f.dy, 10. - (p.y + 8.) / 10000.);
     s.image = assets.load(f.file.clone());
@@ -342,10 +391,11 @@ fn walk(
         m.progress = 0.;
     }
     **hud = Text::new(format!(
-        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | F5 save / F9 load\nHex {} | {} steps remaining | {}\nCombat and interactions not connected",
+        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | F5 save / F9 load\nHex {} | {} steps remaining | {}\n{}",
         m.tile,
         m.path.len(),
-        m.message
+        m.message,
+        fight.status(&bag)
     ));
 }
 
@@ -470,51 +520,30 @@ fn save_input(
     data: Res<SceneData>,
     mut motion: ResMut<Motion>,
     mut bag: ResMut<inventory_ui::Bag>,
+    mut fight: ResMut<combat_ui::Fight>,
+    mut camera: Single<&mut Transform, (With<Camera>, Without<Player>)>,
 ) {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/quicksave.json");
-    let ids: Vec<i32> = bag
-        .inventory
-        .items
-        .iter()
-        .filter(|i| i.item_type == 3)
-        .map(|i| i.id)
-        .collect();
     if keys.just_pressed(KeyCode::F5) {
-        if motion.progress > 0. {
-            motion.message = "Wait until walking finishes before saving".into();
-            return;
-        }
-        let s = save::SaveGame {
-            schema: 1,
-            tile: motion.tile,
-            facing: motion.facing,
-            equipped: bag.inventory.equipped,
-        };
-        motion.message = match s
-            .validate(&data.walkable, &ids)
-            .and_then(|_| s.encode())
-            .and_then(|text| std::fs::write(path, text).map_err(|e| e.to_string()))
-        {
-            Ok(()) => "Position and weapon saved".into(),
-            Err(e) => format!("Save failed: {}", e),
+        motion.message = if motion.progress > 0. {
+            "Finish moving before saving".into()
+        } else {
+            match combat_ui::save_checkpoint(path, &data, &fight, &bag, &motion) {
+                Ok(()) => "Game saved (position, health, rats and ammunition)".into(),
+                Err(e) => format!("Save failed: {e}"),
+            }
         };
     }
     if keys.just_pressed(KeyCode::F9) {
-        match std::fs::read_to_string(path)
-            .map_err(|e| e.to_string())
-            .and_then(|text| save::SaveGame::decode(&text, &data.walkable, &ids))
-        {
-            Ok(s) => {
-                motion.tile = s.tile;
-                motion.from = s.tile;
-                motion.facing = s.facing;
-                motion.progress = 0.;
-                motion.path.clear();
-                bag.inventory.equipped = s.equipped;
-                bag.dirty = true;
-                motion.message = "Position and weapon loaded".into();
-            }
-            Err(e) => motion.message = format!("Load failed: {}", e),
-        }
+        motion.message =
+            match combat_ui::load_checkpoint(path, &data, &mut fight, &mut bag, &mut motion) {
+                Ok(()) => {
+                    let p = point(motion.tile);
+                    camera.translation.x = p.x;
+                    camera.translation.y = p.y;
+                    "Game loaded".into()
+                }
+                Err(e) => format!("Load failed: {e}"),
+            };
     }
 }
