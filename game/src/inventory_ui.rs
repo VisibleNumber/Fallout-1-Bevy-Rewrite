@@ -4,6 +4,8 @@ use bevy::prelude::*;
 #[derive(Resource)]
 pub struct Bag {
     pub inventory: Inventory,
+    /// First positive-quantity catalog row shown in the six-slot viewport.
+    pub row_offset: usize,
     pub open: bool,
     pub block_frame: bool,
     pub dirty: bool,
@@ -13,12 +15,47 @@ impl Bag {
     pub fn new(items: Vec<crate::inventory::Item>) -> Self {
         Self {
             inventory: Inventory::new(items).expect("valid imported inventory"),
+            row_offset: 0,
             open: false,
             block_frame: false,
             dirty: true,
             notice: String::new(),
         }
     }
+}
+
+const VISIBLE_ROWS: usize = 6;
+
+fn positive_indices(bag: &Bag) -> Vec<usize> {
+    bag.inventory
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| (item.quantity > 0).then_some(index))
+        .collect()
+}
+
+fn keep_selection_visible(bag: &mut Bag) {
+    let indices = positive_indices(bag);
+    if indices.is_empty() {
+        bag.row_offset = 0;
+        return;
+    }
+    if !indices.contains(&bag.inventory.selected) {
+        bag.inventory.selected = indices[0];
+    }
+    let selected_row = indices
+        .iter()
+        .position(|&index| index == bag.inventory.selected)
+        .expect("selected positive inventory row");
+    if selected_row < bag.row_offset {
+        bag.row_offset = selected_row;
+    } else if selected_row >= bag.row_offset + VISIBLE_ROWS {
+        bag.row_offset = selected_row + 1 - VISIBLE_ROWS;
+    }
+    bag.row_offset = bag
+        .row_offset
+        .min(indices.len().saturating_sub(VISIBLE_ROWS));
 }
 #[derive(Component)]
 pub struct InventoryPanel;
@@ -30,7 +67,10 @@ pub fn actions(
     buttons: Res<ButtonInput<MouseButton>>,
     window: Single<&Window>,
     mut bag: ResMut<Bag>,
+    mut fight: ResMut<crate::combat_ui::Fight>,
+    mut motion: ResMut<crate::Motion>,
 ) {
+    let was_open = bag.open;
     bag.block_frame = false;
     if keys.just_pressed(KeyCode::KeyI) {
         bag.open = !bag.open;
@@ -53,8 +93,13 @@ pub fn actions(
                     bag.open = false;
                     bag.dirty = true;
                 } else if (35. ..122.).contains(&x) && (32. ..320.).contains(&y) {
-                    let index = ((y - 32.) / 48.) as usize;
-                    if bag.inventory.select(index) {
+                    let row = ((y - 32.) / 48.) as usize;
+                    let indices = positive_indices(&bag);
+                    let visible_row = bag.row_offset + row;
+                    if row < VISIBLE_ROWS
+                        && let Some(&index) = indices.get(visible_row)
+                        && bag.inventory.select(index)
+                    {
                         bag.dirty = true;
                     }
                 } else if (245. ..335.).contains(&x) && (286. ..347.).contains(&y) {
@@ -71,16 +116,37 @@ pub fn actions(
             }
         }
     }
+    if !was_open && bag.open {
+        if fight.player.hp == 0
+            || motion.progress > 0.
+            || fight.attack_time > 0.
+            || (fight.active && fight.player.ap < 4)
+        {
+            bag.open = false;
+            bag.dirty = true;
+            motion.message = "Cannot open inventory now (requires 4 AP in combat)".into();
+        } else if fight.active {
+            fight.player.ap -= 4;
+        }
+    }
     if bag.open {
-        let selected = bag.inventory.selected;
-        if keys.just_pressed(KeyCode::ArrowDown) && selected + 1 < bag.inventory.items.len() {
-            bag.inventory.select(selected + 1);
+        keep_selection_visible(&mut bag);
+        let indices = positive_indices(&bag);
+        if keys.just_pressed(KeyCode::ArrowDown)
+            && let Some(row) = indices.iter().position(|&i| i == bag.inventory.selected)
+            && let Some(&next) = indices.get(row + 1)
+        {
+            bag.inventory.select(next);
             bag.dirty = true;
         }
-        if keys.just_pressed(KeyCode::ArrowUp) && selected > 0 {
-            bag.inventory.select(selected - 1);
+        if keys.just_pressed(KeyCode::ArrowUp)
+            && let Some(row) = indices.iter().position(|&i| i == bag.inventory.selected)
+            && row > 0
+        {
+            bag.inventory.select(indices[row - 1]);
             bag.dirty = true;
         }
+        keep_selection_visible(&mut bag);
         if keys.just_pressed(KeyCode::KeyE) || keys.just_pressed(KeyCode::Enter) {
             equip(&mut bag);
         }
@@ -128,6 +194,14 @@ pub fn refresh(
     if !bag.open {
         return;
     }
+    keep_selection_visible(&mut bag);
+    let positive = positive_indices(&bag);
+    let visible = positive
+        .iter()
+        .skip(bag.row_offset)
+        .take(VISIBLE_ROWS)
+        .copied()
+        .collect::<Vec<_>>();
     commands
         .spawn((
             InventoryPanel,
@@ -159,8 +233,9 @@ pub fn refresh(
                             ..default()
                         },
                     ));
-                    for (index, item) in bag.inventory.items.iter().enumerate().take(6) {
-                        let y = 34. + index as f32 * 48.;
+                    for (row, &index) in visible.iter().enumerate() {
+                        let item = &bag.inventory.items[index];
+                        let y = 34. + row as f32 * 48.;
                         panel
                             .spawn((
                                 Node {
@@ -265,7 +340,7 @@ pub fn refresh(
                     }
                     panel.spawn((
                         Text::new(format!(
-                            "{} | {} lb\nI / Esc close | E equip weapon\n{}",
+                            "{} | {} lb\nI/Esc close | E equip\nU use | R load | X unload | arrows scroll\n{}",
                             data.player_name,
                             bag.inventory.weight(),
                             bag.notice
@@ -280,7 +355,7 @@ pub fn refresh(
                             left: px(136),
                             top: px(232),
                             width: px(305),
-                            max_height: px(50),
+                            max_height: px(60),
                             overflow: Overflow::clip(),
                             ..default()
                         },

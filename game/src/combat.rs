@@ -66,6 +66,17 @@ pub fn attack(
     roll: i32,
     damage_roll: i32,
 ) -> Result<AttackOutcome, String> {
+    attack_with_profile(attacker, target, weapon, distance, roll, damage_roll, None)
+}
+pub fn attack_with_profile(
+    attacker: &mut Combatant,
+    target: &mut Combatant,
+    weapon: &mut Weapon,
+    distance: i32,
+    roll: i32,
+    damage_roll: i32,
+    profile: Option<&crate::damage::DamageProfile>,
+) -> Result<AttackOutcome, String> {
     validate_combatant(attacker, "attacker")?;
     validate_combatant(target, "target")?;
     if attacker.hp == 0 {
@@ -118,7 +129,12 @@ pub fn attack(
     let hit_chance =
         (i64::from(weapon.skill) - i64::from(target.armor_class) + distance_modifier).min(95);
     let hit = i64::from(roll) <= hit_chance;
-    let damage = if hit { damage_roll.min(target.hp) } else { 0 };
+    let resolved = if let Some(p) = profile {
+        crate::damage::ordinary_damage(damage_roll, p)?
+    } else {
+        damage_roll
+    };
+    let damage = if hit { resolved.min(target.hp) } else { 0 };
 
     // Mutations happen only after every input and precondition has passed.
     attacker.ap -= weapon.ap_cost;
@@ -169,6 +185,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn armored_attack_uses_threshold_and_resistance_without_changing_accuracy_cost() {
+        let mut a = combatant(1, 30, 8, 0);
+        let mut t = combatant(2, 20, 6, 0);
+        let mut w = rifle();
+        let profile = crate::damage::DamageProfile {
+            threshold: 3,
+            resistance: 50,
+            ammo_resistance_modifier: 0,
+            ammo_multiplier: 1,
+            ammo_divisor: 1,
+            damage_multiplier: 2,
+            bonus_damage: 0,
+            difficulty_percent: 100,
+        };
+        let out = attack_with_profile(&mut a, &mut t, &mut w, 1, 1, 9, Some(&profile)).unwrap();
+        assert_eq!(out.damage, 3);
+        assert_eq!(t.hp, 17);
+        assert_eq!(a.ap, 4);
+        assert_eq!(w.ammo, 4);
+        let previous = (a.clone(), t.clone(), w.clone());
+        let invalid = crate::damage::DamageProfile {
+            threshold: -1,
+            ..profile
+        };
+        assert!(attack_with_profile(&mut a, &mut t, &mut w, 1, 1, 9, Some(&invalid)).is_err());
+        assert_eq!((a, t, w), previous);
+    }
     #[test]
     fn ranged_hit_spends_ap_and_ammo_and_applies_damage() {
         let mut attacker = combatant(1, 30, 8, 0);

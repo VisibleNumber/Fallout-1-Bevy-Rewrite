@@ -16,6 +16,8 @@ pub struct ActorData {
     pub max_hp: i32,
     pub ap: i32,
     pub armor_class: i32,
+    pub thresholds: Vec<i32>,
+    pub resistances: Vec<i32>,
     pub melee_damage: i32,
     pub skill: i32,
     pub rotation: usize,
@@ -25,6 +27,7 @@ pub struct ActorData {
 #[derive(Deserialize)]
 pub struct WeaponData {
     pub pid: i32,
+    pub damage_type: usize,
     pub min_damage: i32,
     pub max_damage: i32,
     pub range: i32,
@@ -55,6 +58,7 @@ pub struct Fight {
     pub active: bool,
     pub touched: bool,
     pub attack_time: f32,
+    pub looted: Vec<i32>,
     seed: u64,
 }
 impl Fight {
@@ -77,6 +81,7 @@ impl Fight {
             active: false,
             touched: false,
             attack_time: 0.,
+            looted: Vec::new(),
             seed: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -173,13 +178,24 @@ fn shoot(index: usize, data: &SceneData, fight: &mut Fight, bag: &mut Bag, motio
     let d = distance(motion.tile, fight.rats[index].tile);
     let roll = fight.roll(1, 100);
     let damage = fight.roll(weapon.min_damage, weapon.max_damage);
-    match combat::attack(
+    let profile = crate::damage::DamageProfile {
+        threshold: data.actors[index].thresholds[spec.damage_type],
+        resistance: data.actors[index].resistances[spec.damage_type],
+        ammo_resistance_modifier: 0,
+        ammo_multiplier: 1,
+        ammo_divisor: 1,
+        damage_multiplier: 2,
+        bonus_damage: 0,
+        difficulty_percent: 100,
+    };
+    match combat::attack_with_profile(
         &mut fight.player,
         &mut fight.rats[index],
         &mut weapon,
         d,
         roll,
         damage,
+        Some(&profile),
     ) {
         Ok(result) => {
             fight.attack_time = 0.8;
@@ -446,6 +462,9 @@ pub fn smoke(
 #[derive(Deserialize, Serialize)]
 struct Checkpoint {
     schema: u32,
+    seed: u64,
+    inventory: Vec<ItemState>,
+    looted: Vec<i32>,
     #[serde(default)]
     touched: bool,
     position: crate::save::SaveGame,
@@ -476,7 +495,20 @@ fn checkpoint(
             .collect(),
     };
     let checkpoint = Checkpoint {
-        schema: 2,
+        schema: 3,
+        seed: fight.seed,
+        inventory: bag
+            .inventory
+            .items
+            .iter()
+            .map(|i| ItemState {
+                id: i.id,
+                quantity: i.quantity,
+                ammo: i.ammo_quantity,
+                ammo_pid: i.ammo_pid,
+            })
+            .collect(),
+        looted: fight.looted.clone(),
         touched: fight.touched,
         position,
         combat,
@@ -485,8 +517,11 @@ fn checkpoint(
     Ok(checkpoint)
 }
 fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<(), String> {
-    if c.schema != 2 {
+    if c.schema != 3 {
         return Err("Unsupported checkpoint version".into());
+    }
+    if c.seed == 0 {
+        return Err("Invalid random state".into());
     }
     let initial = Fight::new(data);
     let caps = bag
@@ -497,6 +532,61 @@ fn validate_checkpoint(c: &Checkpoint, data: &SceneData, bag: &Bag) -> Result<()
         .map(|i| (i.id, i.ammo_capacity))
         .collect::<Vec<_>>();
     c.combat.validate(&initial.player, &initial.rats, &caps)?;
+    if c.inventory.len() != data.inventory.len() {
+        return Err("Inventory roster mismatch".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for id in &c.looted {
+        if !seen.insert(*id) || !data.loot_containers.iter().any(|x| x.id == *id) {
+            return Err("Invalid looted container".into());
+        }
+    }
+    for (state, item) in c.inventory.iter().zip(&data.inventory) {
+        let gained = data
+            .loot_containers
+            .iter()
+            .filter(|x| c.looted.contains(&x.id))
+            .flat_map(|x| &x.contents)
+            .filter(|x| x.item_id == item.id)
+            .map(|x| x.quantity)
+            .sum::<i32>();
+        if state.id != item.id || state.quantity < 0 || state.quantity > item.quantity + gained {
+            return Err("Invalid inventory quantity or identity".into());
+        }
+        let cap = if item.item_type == 4 {
+            item.ammo_pack_size
+        } else {
+            item.ammo_capacity
+        };
+        if state.ammo < 0
+            || state.ammo > cap
+            || (item.item_type == 4 && state.quantity > 0 && state.ammo == 0)
+        {
+            return Err("Invalid ammunition packet".into());
+        }
+        if item.ammo_capacity > 0
+            && c.combat
+                .ammo
+                .iter()
+                .find(|(id, _)| *id == item.id)
+                .map(|(_, a)| *a)
+                != Some(state.ammo)
+        {
+            return Err("Ammunition records disagree".into());
+        }
+        if item.ammo_capacity > 0
+            && state.ammo > 0
+            && !data
+                .inventory
+                .iter()
+                .any(|a| a.item_type == 4 && a.pid == state.ammo_pid && a.caliber == item.caliber)
+        {
+            return Err("Invalid loaded ammunition type".into());
+        }
+        if c.position.equipped == Some(item.id) && state.quantity == 0 {
+            return Err("Equipped item is depleted".into());
+        }
+    }
     if c.combat
         .rats
         .iter()
@@ -537,8 +627,10 @@ pub fn save_checkpoint(
     motion: &Motion,
 ) -> Result<(), String> {
     let c = checkpoint(data, fight, bag, motion)?;
-    std::fs::write(path, serde_json::to_string(&c).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())
+    let temp = format!("{path}.tmp");
+    std::fs::write(&temp, serde_json::to_string(&c).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    std::fs::rename(&temp, path).map_err(|e| e.to_string())
 }
 pub fn load_checkpoint(
     path: &str,
@@ -551,11 +643,18 @@ pub fn load_checkpoint(
     let c: Checkpoint = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     validate_checkpoint(&c, data, bag)?;
     // Apply only after the complete snapshot passes validation.
+    fight.seed = c.seed;
     fight.attack_time = 0.;
     fight.player = c.combat.player;
     fight.rats = c.combat.rats;
     fight.active = c.combat.active;
     fight.touched = c.touched;
+    fight.looted = c.looted;
+    for (item, state) in bag.inventory.items.iter_mut().zip(c.inventory) {
+        item.quantity = state.quantity;
+        item.ammo_quantity = state.ammo;
+        item.ammo_pid = state.ammo_pid;
+    }
     for (id, ammo) in c.combat.ammo {
         bag.inventory
             .items
@@ -573,3 +672,260 @@ pub fn load_checkpoint(
     motion.path.clear();
     Ok(())
 }
+
+#[derive(Deserialize)]
+pub struct LootContainer {
+    pub id: i32,
+    pub tile: i32,
+    pub name: String,
+    pub contents: Vec<LootSlot>,
+}
+#[derive(Deserialize)]
+pub struct LootSlot {
+    pub item_id: i32,
+    pub quantity: i32,
+}
+fn reload(fight: &mut Fight, bag: &mut Bag) -> Result<i32, String> {
+    let cost = if fight.active && !bag.open { 2 } else { 0 };
+    if fight.player.ap < cost {
+        return Err("Reloading requires 2 AP".into());
+    }
+    let selected = bag.inventory.selected;
+    let rounds = if bag.open
+        && bag
+            .inventory
+            .items
+            .get(selected)
+            .is_some_and(|i| i.item_type == 4)
+    {
+        bag.inventory.reload_from(selected)?
+    } else {
+        bag.inventory.reload_equipped()?
+    };
+    fight.player.ap -= cost;
+    fight.touched = true;
+    bag.dirty = true;
+    Ok(rounds)
+}
+fn heal(fight: &mut Fight, bag: &mut Bag) -> Result<i32, String> {
+    let i = bag.inventory.selected;
+    let item = bag.inventory.items.get(i).ok_or("No selected item")?;
+    if item.heal_max <= 0 {
+        return Err("Selected item cannot be used as healing".into());
+    }
+    let roll = fight.roll(item.heal_min, item.heal_max);
+    let restored = bag
+        .inventory
+        .consume_healing(i, roll, fight.player.hp, fight.player.max_hp)?;
+    fight.player.hp += restored;
+    fight.touched = true;
+    bag.dirty = true;
+    Ok(restored)
+}
+fn take_loot(
+    data: &SceneData,
+    fight: &mut Fight,
+    bag: &mut Bag,
+    tile: i32,
+) -> Result<String, String> {
+    let c = data
+        .loot_containers
+        .iter()
+        .min_by_key(|c| distance(tile, c.tile))
+        .ok_or("No container here")?;
+    if distance(tile, c.tile) > 1
+        && fight
+            .rats
+            .iter()
+            .any(|r| r.hp == 0 && distance(tile, r.tile) <= 1)
+    {
+        return Err("The rat has nothing to take".into());
+    }
+    if distance(tile, c.tile) > 1 {
+        return Err(format!("Move next to {} to search it", c.name));
+    }
+    if fight.looted.contains(&c.id) {
+        return Err(format!("{} is empty", c.name));
+    }
+    let weight = c
+        .contents
+        .iter()
+        .map(|s| {
+            bag.inventory
+                .items
+                .iter()
+                .find(|i| i.id == s.item_id)
+                .unwrap()
+                .weight
+                * s.quantity
+        })
+        .sum::<i32>();
+    if bag.inventory.weight() + weight > data.carry_weight {
+        return Err("You cannot carry that much".into());
+    }
+    let mut names = Vec::new();
+    for slot in &c.contents {
+        let item = bag
+            .inventory
+            .items
+            .iter_mut()
+            .find(|i| i.id == slot.item_id)
+            .unwrap();
+        if item.quantity == 0 && item.item_type == 4 {
+            item.ammo_quantity = item.ammo_pack_size;
+        }
+        item.quantity += slot.quantity;
+        names.push(format!("{} x{}", item.name, slot.quantity));
+    }
+    fight.looted.push(c.id);
+    fight.touched = true;
+    bag.dirty = true;
+    Ok(format!("Found {}", names.join(", ")))
+}
+pub fn item_actions(
+    keys: Res<ButtonInput<KeyCode>>,
+    data: Res<SceneData>,
+    mut fight: ResMut<Fight>,
+    mut bag: ResMut<Bag>,
+    mut motion: ResMut<Motion>,
+) {
+    if fight.player.hp == 0 || motion.progress > 0. || fight.attack_time > 0. {
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyR) {
+        motion.message = match reload(&mut fight, &mut bag) {
+            Ok(n) => format!("Reloaded {n} rounds"),
+            Err(e) => e,
+        };
+        bag.notice = motion.message.clone();
+    }
+    if bag.open && keys.just_pressed(KeyCode::KeyX) {
+        motion.message = match bag.inventory.unload_equipped() {
+            Ok(n) => {
+                bag.dirty = true;
+                fight.touched = true;
+                format!("Unloaded {n} rounds")
+            }
+            Err(e) => e,
+        };
+        bag.notice = motion.message.clone();
+    }
+    if bag.open && keys.just_pressed(KeyCode::KeyU) {
+        motion.message = match heal(&mut fight, &mut bag) {
+            Ok(n) => format!("Recovered {n} HP"),
+            Err(e) => e,
+        };
+        bag.notice = motion.message.clone();
+        bag.dirty = true;
+    }
+    if !bag.open && keys.just_pressed(KeyCode::KeyG) {
+        motion.message = match take_loot(&data, &mut fight, &mut bag, motion.tile) {
+            Ok(text) => text,
+            Err(e) => e,
+        };
+    }
+}
+
+pub fn items_smoke(
+    mut commands: Commands,
+    time: Res<Time>,
+    data: Res<SceneData>,
+    mut fight: ResMut<Fight>,
+    mut bag: ResMut<Bag>,
+    mut motion: ResMut<Motion>,
+    mut stage: Local<u8>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !std::env::args().any(|a| a == "--items-smoke") {
+        return;
+    }
+    if *stage == 0 && time.elapsed_secs() > 3. {
+        let gun = bag
+            .inventory
+            .items
+            .iter()
+            .position(|i| i.ammo_capacity > 0)
+            .unwrap();
+        bag.inventory.select(gun);
+        bag.inventory.equip_selected().unwrap();
+        bag.inventory.items[gun].ammo_quantity = 0;
+        let ammo = bag
+            .inventory
+            .items
+            .iter()
+            .position(|i| i.item_type == 4 && i.quantity > 0)
+            .unwrap();
+        let before = bag.inventory.items[ammo].ammo_quantity;
+        fight.active = true;
+        fight.player.ap = fight.player.max_ap;
+        assert_eq!(reload(&mut fight, &mut bag).unwrap(), 12);
+        assert_eq!(fight.player.ap, fight.player.max_ap - 2);
+        assert_eq!(bag.inventory.items[ammo].ammo_quantity, before - 12);
+        fight.player.hp = fight.player.max_hp - 15;
+        let stim = bag
+            .inventory
+            .items
+            .iter()
+            .position(|i| i.heal_max > 0)
+            .unwrap();
+        bag.inventory.select(stim);
+        let count = bag.inventory.items[stim].quantity;
+        let restored = heal(&mut fight, &mut bag).unwrap();
+        assert!((10..=15).contains(&restored));
+        assert_eq!(bag.inventory.items[stim].quantity, count - 1);
+        let c = &data.loot_containers[0];
+        let tile = navigation::neighbors(c.tile)
+            .into_iter()
+            .find(|(t, _)| data.walkable[*t as usize])
+            .unwrap()
+            .0;
+        motion.tile = tile;
+        motion.from = tile;
+        fight.player.tile = tile;
+        take_loot(&data, &mut fight, &mut bag, tile).unwrap();
+        assert!(
+            take_loot(&data, &mut fight, &mut bag, tile)
+                .unwrap_err()
+                .contains("empty")
+        );
+        let file = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/items-save-smoke.json");
+        let expected = bag.inventory.items.clone();
+        let health = fight.player.hp;
+        save_checkpoint(file, &data, &fight, &bag, &motion).unwrap();
+        bag.inventory.items[stim].quantity = 0;
+        fight.looted.clear();
+        fight.player.hp = 1;
+        load_checkpoint(file, &data, &mut fight, &mut bag, &mut motion).unwrap();
+        assert_eq!(bag.inventory.items, expected);
+        assert_eq!(fight.player.hp, health);
+        assert_eq!(fight.looted, vec![c.id]);
+        bag.open = true;
+        bag.dirty = true;
+        bag.notice = "Reloaded, healed, looted and restored checkpoint".into();
+        *stage = 1;
+    }
+    if *stage == 1 && time.elapsed_secs() > 6. {
+        commands
+            .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
+            .observe(bevy::render::view::screenshot::save_to_disk(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/assets/items-smoke.png"
+            )));
+        *stage = 2;
+    }
+    if time.elapsed_secs() > 9. {
+        exit.write(AppExit::Success);
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct ItemState {
+    id: i32,
+    quantity: i32,
+    ammo: i32,
+    ammo_pid: i32,
+}
+
+#[cfg(test)]
+#[path = "checkpoint_tests.rs"]
+mod checkpoint_tests;

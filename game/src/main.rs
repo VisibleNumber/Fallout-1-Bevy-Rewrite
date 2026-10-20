@@ -3,13 +3,16 @@ use serde::Deserialize;
 use std::collections::VecDeque;
 mod combat;
 mod combat_ui;
+mod damage;
 mod distance;
+mod interaction;
+mod interface;
 mod inventory;
 mod inventory_ui;
 mod navigation;
 mod save;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Frame {
     file: String,
     h: f32,
@@ -40,6 +43,10 @@ struct Placed {
 }
 #[derive(Deserialize, Resource)]
 struct SceneData {
+    examinables: Vec<interaction::Examinable>,
+    ap_light: Frame,
+    carry_weight: i32,
+    loot_containers: Vec<combat_ui::LootContainer>,
     unarmed_attacking: Vec<Vec<Frame>>,
     shot_blocked: Vec<bool>,
     actors: Vec<combat_ui::ActorData>,
@@ -121,13 +128,17 @@ fn main() {
             Update,
             (
                 inventory_ui::actions,
+                combat_ui::item_actions,
                 combat_ui::actions,
+                interaction::examine,
                 save_input,
                 input,
                 walk,
                 inventory_ui::refresh,
                 combat_ui::render,
+                interface::update,
                 combat_ui::smoke,
+                combat_ui::items_smoke,
                 inventory_smoke,
                 smoke,
             )
@@ -175,6 +186,7 @@ fn setup(mut commands: Commands, data: Res<SceneData>, assets: Res<AssetServer>)
                     },
                 ));
             }
+            interface::spawn(parent, &assets, &data.ap_light.file);
             for (y, value) in [(40., data.hit_points), (75., data.armor_class)] {
                 parent
                     .spawn((
@@ -391,7 +403,7 @@ fn walk(
         m.progress = 0.;
     }
     **hud = Text::new(format!(
-        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | F5 save / F9 load\nHex {} | {} steps remaining | {}\n{}",
+        "FALLOUT REWRITE | Original artwork\nClick ground | WASD pan | I inventory | R reload | G search | F5 / F9\nHex {} | {} steps remaining | {}\n{}",
         m.tile,
         m.path.len(),
         m.message,
