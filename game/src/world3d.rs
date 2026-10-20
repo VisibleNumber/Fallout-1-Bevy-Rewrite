@@ -28,6 +28,7 @@ struct Prop {
     x: f32,
     z: f32,
     kind: i32,
+    tile: i32,
     #[serde(default)]
     solid: bool,
     #[serde(default)]
@@ -126,6 +127,7 @@ struct Controller {
     first: bool,
     moving: bool,
     roofs: bool,
+    overview: bool,
     clock: f32,
 }
 #[derive(Component)]
@@ -136,6 +138,15 @@ struct Avatar;
 struct Npc(usize);
 #[derive(Component)]
 struct Status;
+#[derive(Component)]
+struct Door {
+    center: Vec2,
+    tile: i32,
+    axis: Vec2,
+    rotation: Quat,
+    open: bool,
+}
+
 #[derive(Component)]
 struct Roof;
 fn ground(tile: i32) -> Vec2 {
@@ -151,10 +162,16 @@ fn tile_at(p: Vec2) -> Option<i32> {
     Some(r * 200 + 199 - c)
 }
 pub fn run() {
-    let raw = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/assets/scene-shadyw.json"
-    ))
+    let map = if std::env::args().any(|a| a == "--town-east") {
+        "shadye"
+    } else {
+        "shadyw"
+    };
+    let raw = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(format!("scene-{map}.json")),
+    )
     .expect("Run node game/prepare-world.mjs first");
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
     let art: Art = serde_json::from_value(value["view3d"].clone())
@@ -175,7 +192,7 @@ pub fn run() {
             progress: 0.,
             facing: 2,
             clock: 0.,
-            message: "Original artwork | Shady Sands west".into(),
+            message: format!("Original artwork | {map}"),
         })
         .insert_resource(Controller {
             position: ground(tile),
@@ -184,6 +201,7 @@ pub fn run() {
             first: false,
             moving: false,
             roofs: true,
+            overview: false,
             clock: 0.,
         })
         .insert_resource(ClearColor(Color::srgb(0.28, 0.23, 0.16)))
@@ -208,11 +226,13 @@ pub fn run() {
             Update,
             (
                 inventory_ui::actions,
+                door_smoke,
                 controls,
                 combat_ui::item_actions,
                 inventory_ui::refresh,
                 draw,
                 smoke,
+                switch_map,
             )
                 .chain(),
         )
@@ -289,9 +309,6 @@ fn setup(
     let leaf_mesh = meshes.add(Cuboid::new(0.96, 2.1, 0.12));
     let mut walls = Walls::default();
     for f in &art.floors {
-        if Vec2::new(f.x + 1., f.z + 1.).distance(control.position) > 25. {
-            continue;
-        }
         let texture = cache
             .entry(f.file.clone())
             .or_insert_with(|| material(&f.file, &assets, &mut materials))
@@ -310,9 +327,6 @@ fn setup(
     let edge_x = meshes.add(Cuboid::new(2.08, 0.18, 0.16));
     let edge_z = meshes.add(Cuboid::new(0.16, 0.18, 2.08));
     for f in &art.roofs {
-        if Vec2::new(f.x + 1., f.z + 1.).distance(control.position) > 25. {
-            continue;
-        }
         commands.spawn((
             Roof,
             Mesh3d(roof_mesh.clone()),
@@ -340,9 +354,6 @@ fn setup(
         }
     }
     for f in &art.props {
-        if Vec2::new(f.x, f.z).distance(control.position) > 23. {
-            continue;
-        }
         if f.door {
             let mut neighbors: Vec<&Prop> = art
                 .props
@@ -382,6 +393,13 @@ fn setup(
                 Transform::from_xyz(f.x, 2.25, f.z).with_rotation(rotation),
             ));
             commands.spawn((
+                Door {
+                    center: Vec2::new(f.x, f.z),
+                    tile: f.tile,
+                    axis,
+                    rotation,
+                    open: false,
+                },
                 Mesh3d(leaf_mesh.clone()),
                 MeshMaterial3d(door_material.clone()),
                 Transform::from_xyz(f.x, 1.05, f.z).with_rotation(rotation),
@@ -393,7 +411,7 @@ fn setup(
             commands.spawn((
                 Mesh3d(wall_mesh.clone()),
                 MeshMaterial3d(wall_material.clone()),
-                Transform::from_xyz(f.x, WALL_HEIGHT / 2., f.z),
+                Transform::from_xyz(f.x, 0., f.z),
             ));
             walls.0.push(Vec2::new(f.x, f.z));
             continue;
@@ -417,9 +435,6 @@ fn setup(
     commands.insert_resource(walls);
     for (i, npc) in data.actors.iter().enumerate().filter(|(_, a)| a.visible) {
         let pos = ground(npc.tile);
-        if pos.distance(control.position) > 23. {
-            continue;
-        }
         let f = &npc.standing[npc.rotation];
         // NPC materials are independent because each selects its own facing.
         commands.spawn((
@@ -433,14 +448,15 @@ fn setup(
     // Locally converted New Vegas examples; never distributed with source.
     for (name, offset, lift) in [
         ("table01", Vec2::new(1.5, -2.), 0.350426),
-        ("nv_shackvictor", Vec2::new(5., -9.), 0.),
+        ("nv_shackvictor", Vec2::new(5., -9.), 2.2),
         ("nv_prospectorsaloon_door", Vec2::new(-2., -3.), 0.),
     ] {
         let file = format!("nv/converted/{name}/model.gltf");
-        if std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("assets")
-            .join(&file)
-            .exists()
+        if std::env::args().any(|a| a == "--nv-samples")
+            && std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(&file)
+                .exists()
         {
             commands.spawn((
                 SceneRoot(assets.load(GltfAssetLabel::Scene(0).from_asset(file))),
@@ -505,9 +521,10 @@ fn controls(
     buttons: Res<ButtonInput<MouseButton>>,
     mouse: Res<AccumulatedMouseMotion>,
     time: Res<Time>,
-    data: Res<SceneData>,
+    mut data: ResMut<SceneData>,
     bag: Res<inventory_ui::Bag>,
-    walls: Res<Walls>,
+    mut walls: ResMut<Walls>,
+    mut doors: Query<(&mut Door, &mut Transform)>,
     mut control: ResMut<Controller>,
     mut motion: ResMut<Motion>,
     mut fight: ResMut<combat_ui::Fight>,
@@ -519,6 +536,9 @@ fn controls(
     control.moving = false;
     if bag.open || bag.block_frame {
         return;
+    }
+    if keys.just_pressed(KeyCode::KeyV) {
+        control.overview = !control.overview;
     }
     if keys.just_pressed(KeyCode::KeyH) {
         control.roofs = !control.roofs;
@@ -562,6 +582,43 @@ fn controls(
     motion.tile = tile_at(control.position).unwrap();
     fight.player.tile = motion.tile;
     if keys.just_pressed(KeyCode::KeyE) {
+        if let Some((mut door, mut transform)) = doors
+            .iter_mut()
+            .filter(|(d, _)| d.center.distance(control.position) < 2.)
+            .min_by(|(a, _), (b, _)| {
+                a.center
+                    .distance_squared(control.position)
+                    .total_cmp(&b.center.distance_squared(control.position))
+            })
+        {
+            if door.open && door.center.distance(control.position) < 0.9 {
+                motion.message = "Step away before closing the door".into();
+                return;
+            }
+            door.open = !door.open;
+            walls.0.retain(|p| p.distance_squared(door.center) > 0.001);
+            if !door.open {
+                walls.0.push(door.center);
+            }
+            data.walkable[door.tile as usize] = door.open;
+            let hinge = door.center - door.axis * 0.48;
+            let rotation = door.rotation
+                * Quat::from_rotation_y(if door.open {
+                    std::f32::consts::FRAC_PI_2
+                } else {
+                    0.
+                });
+            transform.translation =
+                Vec3::new(hinge.x, 1.05, hinge.y) + rotation * Vec3::new(0.48, 0., 0.);
+            transform.rotation = rotation;
+            motion.message = if door.open {
+                "Door opened"
+            } else {
+                "Door closed"
+            }
+            .into();
+            return;
+        }
         if let Some(npc) = data
             .actors
             .iter()
@@ -614,7 +671,12 @@ fn draw(
         -control.yaw.cos() * control.pitch.cos(),
     );
     let eye = Vec3::new(control.position.x, 1.55, control.position.y);
-    **camera = if control.first {
+    **camera = if control.overview {
+        Transform::from_xyz(control.position.x + 32., 48., control.position.y + 35.).looking_at(
+            Vec3::new(control.position.x, 0., control.position.y),
+            Vec3::Y,
+        )
+    } else if control.first {
         Transform::from_translation(eye).looking_to(direction, Vec3::Y)
     } else {
         let desired = eye - direction * 5. + Vec3::Y * 1.4;
@@ -660,7 +722,7 @@ fn draw(
         }
     }
     **status = Text::new(format!(
-        "FALLOUT | Original-art 3D Shady Sands | {} person\nWASD move | Hold right mouse: look | Tab: camera | H: roofs | I: inventory\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
+        "FALLOUT | Original-art 3D Shady Sands | {} person\nWASD move | Hold right mouse: look | Tab: camera | H: roofs | V: overview | F2: west/east | I: inventory | E: door/NPC\nHP {}/{} | Hex {} | {}\nGEOMETRY BLOCKOUT | Plain walls and roofs | H toggles roofs for layout review",
         if control.first { "First" } else { "Third" },
         fight.player.hp,
         fight.player.max_hp,
@@ -672,9 +734,29 @@ fn smoke(
     time: Res<Time>,
     mut control: ResMut<Controller>,
     mut stage: Local<u8>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    data: Res<SceneData>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if std::env::args().any(|a| a == "--town-switch-smoke") {
+        if *stage == 0 && time.elapsed_secs() > 4. {
+            assert_eq!(data.map_name, "shadyw");
+            keys.press(KeyCode::F2);
+            *stage = 1;
+        }
+        if *stage == 1 && data.map_name == "shadye" && time.elapsed_secs() > 7. {
+            keys.release(KeyCode::F2);
+            keys.press(KeyCode::F2);
+            *stage = 2;
+        }
+        if *stage == 2 && data.map_name == "shadyw" {
+            println!("3D west/east round trip passed");
+            exit.write(AppExit::Success);
+        }
+        assert!(time.elapsed_secs() < 25., "Town switching timed out");
+        return;
+    }
     if !std::env::args().any(|a| a == "--3d-smoke") {
         return;
     }
@@ -682,13 +764,21 @@ fn smoke(
         control.yaw = -0.45;
         control.pitch = -0.06;
     }
+    if std::env::args().any(|a| a == "--town-overview") {
+        control.overview = true;
+    }
     if *stage == 0 && time.elapsed_secs() > 5. {
         commands
             .spawn(bevy::render::view::screenshot::Screenshot::primary_window())
-            .observe(bevy::render::view::screenshot::save_to_disk(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/assets/third-person-smoke.png"
-            )));
+            .observe(bevy::render::view::screenshot::save_to_disk(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets")
+                    .join(if std::env::args().any(|a| a == "--town-east") {
+                        "shady-east-progress.png"
+                    } else {
+                        "shady-west-progress.png"
+                    }),
+            ));
         *stage = 1;
     }
     if *stage == 1 && time.elapsed_secs() > 6. {
@@ -741,4 +831,126 @@ mod tests {
         }
         assert_eq!(tile_at(Vec2::new(-5., -5.)), None);
     }
+}
+
+fn switch_map(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut data: ResMut<SceneData>,
+    mut art: ResMut<Art>,
+    mut control: ResMut<Controller>,
+    mut motion: ResMut<Motion>,
+    mut fight: ResMut<combat_ui::Fight>,
+    bag: Res<inventory_ui::Bag>,
+    entities: Query<
+        Entity,
+        Or<(
+            With<Mesh3d>,
+            With<Camera3d>,
+            With<Status>,
+            With<DirectionalLight>,
+        )>,
+    >,
+) {
+    if !keys.just_pressed(KeyCode::F2) || bag.open {
+        return;
+    }
+    let name = if data.map_name == "shadyw" {
+        "shadye"
+    } else {
+        "shadyw"
+    };
+    let result = (|| -> Result<(SceneData, Art), String> {
+        let bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("assets")
+                .join(format!("scene-{name}.json")),
+        )
+        .map_err(|e| e.to_string())?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        let art = serde_json::from_value(value["view3d"].clone()).map_err(|e| e.to_string())?;
+        let scene = serde_json::from_value(value).map_err(|e| e.to_string())?;
+        Ok((scene, art))
+    })();
+    let (next, next_art) = match result {
+        Ok(v) => v,
+        Err(e) => {
+            motion.message = e;
+            return;
+        }
+    };
+    let player = fight.player.clone();
+    let story = fight.story.clone();
+    let original = fight.original.clone();
+    *fight = combat_ui::Fight::new(&next);
+    fight.player = player;
+    fight.player.tile = next.spawn_tile;
+    fight.story = story;
+    fight.original = original;
+    motion.tile = next.spawn_tile;
+    motion.from = motion.tile;
+    motion.message = format!("Entered {name}");
+    control.position = ground(motion.tile);
+    control.moving = false;
+    *data = next;
+    *art = next_art;
+    for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+    commands.run_system_cached(setup);
+}
+
+fn door_smoke(
+    time: Res<Time>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut control: ResMut<Controller>,
+    doors: Query<&Door>,
+    data: Res<SceneData>,
+    walls: Res<Walls>,
+    mut stage: Local<u8>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !std::env::args().any(|a| a == "--door-smoke") {
+        return;
+    }
+    if *stage == 0 && time.elapsed_secs() > 3. {
+        let door = doors.iter().min_by_key(|d| d.tile).expect("town door");
+        control.position = door.center + Vec2::new(1.2, 0.);
+        keys.press(KeyCode::KeyE);
+        *stage = 1;
+        return;
+    }
+    if *stage == 1 {
+        let door = doors.iter().min_by_key(|d| d.tile).unwrap();
+        assert!(door.open);
+        assert!(data.walkable[door.tile as usize]);
+        assert!(
+            !walls
+                .0
+                .iter()
+                .any(|p| p.distance_squared(door.center) < 0.001)
+        );
+        keys.release(KeyCode::KeyE);
+        *stage = 2;
+        return;
+    }
+    if *stage == 2 {
+        keys.press(KeyCode::KeyE);
+        *stage = 3;
+        return;
+    }
+    if *stage == 3 {
+        let door = doors.iter().min_by_key(|d| d.tile).unwrap();
+        assert!(!door.open);
+        assert!(!data.walkable[door.tile as usize]);
+        assert!(
+            walls
+                .0
+                .iter()
+                .any(|p| p.distance_squared(door.center) < 0.001)
+        );
+        println!("Door interaction opens/closes geometry and collision");
+        exit.write(AppExit::Success);
+    }
+    assert!(time.elapsed_secs() < 15., "Door check timed out");
 }
